@@ -56,6 +56,10 @@ library(loo)
 
 # MASS gives us access to the glm.nb() function to estimate the dispersion parameter for use in Bayesian model
 library(MASS)
+
+library(igraph)
+
+library(RColorBrewer)
 ```
 
 2. Data Loading and Pre-Processing
@@ -282,9 +286,6 @@ suicide_rate_clean <- suicide_rate %>%
   dplyr::select(municipality_clean, suicide_rate) %>%
   # convert suicide rate to numeric data type
   dplyr::mutate(suicide_rate = as.numeric(suicide_rate))
-
-# view cleaned dataset
-View(suicide_rate_clean)
 ```
 
 3.1. Merging Suicide Rate Data with Municipality Shapefile
@@ -296,9 +297,6 @@ suicide_rate_municipality <- sk_municipalities_clean %>%
   dplyr::left_join(., suicide_rate_clean, by=c("name" = "municipality_clean")) %>% 
   # retain only relevant columns
   dplyr::select(code, name, suicide_rate)
-
-# view the joined dataset
-View(suicide_rate_municipality)
 ```
 
 3.2. Exploratory Mapping of Suicide Rates Across South Korean Municipalities
@@ -396,9 +394,6 @@ single_person_household_clean <- single_person_household %>%
   dplyr::select(municipality_clean, single_person_household_ratio) %>% 
   # convert single person household ratio to numeric data type
   dplyr::mutate(single_person_household_ratio = as.numeric(single_person_household_ratio))
-
-# view cleaned dataset
-View(single_person_household_clean)
 ```
 
 5.2. Stress Awareness Rate
@@ -479,9 +474,6 @@ stress_awareness_rate_clean <- stress_awareness_rate %>%
   dplyr::select(municipality_clean, stress_awareness_rate) %>% 
   # convert single person household ratio to numeric data type
   dplyr::mutate(stress_awareness_rate = as.numeric(stress_awareness_rate))
-
-# view cleaned dataset
-View(stress_awareness_rate_clean)
 ```
 
 5.3. Unemployment Rate
@@ -561,9 +553,6 @@ sejong_unemployment <- tibble(
 unemployment_rate_clean <- unemployment_rate_clean %>%
   bind_rows(sejong_unemployment)
 }
-
-# view cleaned dataset
-View(unemployment_rate_clean)
 ```
 
 5.4. Unmet Medical Needs
@@ -600,9 +589,6 @@ unmet_medical_needs_clean <- unmet_medical_needs %>%
   dplyr::select(municipality_clean, unmet_medical_needs_rate) %>%
   # conveert unmet medical needs rate colun to numeric type
   dplyr::mutate(unmet_medical_needs_rate = as.numeric(unmet_medical_needs_rate))
-
-# view cleaned dataset
-View(unmet_medical_needs_clean)
 ```
 
 5.5. Municipality Population (for expected values & suicide counts)
@@ -632,9 +618,6 @@ municipality_population_2022 <- read_excel(here::here("variables", "predictor va
   dplyr::distinct() %>% 
   # rename municipality column to municipality_clean for consistency across datasets
   dplyr::rename(municipality_clean = municipality)
-
-# view cleaned dataset
-View(municipality_population_2022)
 ```
 
 6. Join Predictor Variables into suicide_rate_municipality dataframe
@@ -670,9 +653,6 @@ model_df <- suicide_rate_municipality %>%
   dplyr::select(code, municipality_en, suicide_count, single_person_household_ratio, stress_awareness_rate, unemployment_rate, unmet_medical_needs_rate, population_density_km2, total_population) %>% 
   # rename 'municipality_en' to 'name'
   dplyr::rename(name = municipality_en)
-
-# view model dataset
-View(model_df)
 ```
 
 7. Data Preparation for ICAR Model
@@ -736,7 +716,6 @@ View(model_df)
 
 ```{r}
 # enable parallel processing in RStudio for Stan
-
 # parallel::detectCores() automatically detects the number of CPU cores available on my local machine
 options(mc.cores = parallel::detectCores())
 # rtan_options(auto_write = TRUE) saves compiled models to avoid redundant compilation
@@ -748,31 +727,129 @@ rstan_options(auto_write = TRUE)
 
 ```{r}
 # in order to estimate the risk of casualties due to suicide across Korean municipalities, we will need to first obtain a column that contains estimated expected number of casualties. This is derived from the total_population column.
-model_df$expected_num <- round(expected(population = model_df$total_population, cases = model_df$suicide_count, n.strata = 1), 0)
-
-# view model_df
-View(model_df)
-# this particular column expected_num is important, as it is used as an offset in our spatial model
 # n.strata = 1 means that no stratification is being applied - the entire dataset is treated as a single stratum
+# this will be used as an offset in our spatial model
+model_df$expected_num <- round(expected(population = model_df$total_population, cases = model_df$suicide_count, n.strata = 1), 0)
 ```
 
 7.3. Converting the Spatial Adjacency Matrix to Nodes & Edges
 
 ```{r}
-# we will need a list of nodes and edges as Stan can only identify adjacency with a set of paired nodes with edges that connect them
-# coerce into a spatial object
+# convert model_df to a spatial object
+# poly2nb() from the spdep package works with sp objects, not sf objects
 model_df_sp <- as(model_df, "Spatial")
 
-# coerce into a matrix object
-adjacency_matrix <- shape2mat(model_df_sp)
+# create standard adjacency matrix using Queen contiguity
+# Queen's contiguity considers any shared boundary or shared vertex as a neighbour
+# the 'snap = 200' argument ensures that near-touching polygons within 200m are considered contiguous
+adj_list <- poly2nb(model_df_sp, queen = TRUE, snap = 200)
 
-# extract the components for the ICAR model using the prep_icar_data function
-extract_components <- prep_icar_data(adjacency_matrix)
+# inspect adj_list
+# the list has 6 subgraphs and 4 isoalted regions (59, 177, 184, 190) with no links
+adj_list
+
+# we need to convert the list-based adjacency strucuture into an igraph object to analyse connected components
+graph_adj <- graph_from_adj_list(adj_list, mode = "all")
+
+# identify subgraph components
+subgraph_labels <- components(graph_adj)$membership
+model_df$subgraph <- as.factor(subgraph_labels)
+
+# find the largest subgraph (mainland Korea)
+largest_subgraph <- which.max(table(subgraph_labels))
+
+# identify all smaller disconnected subgraphs
+# this returns a list of subgraph IDs
+disconnected_subgraphs <- unique(subgraph_labels[subgraph_labels != largest_subgraph])
+
+# inspect disconnected subgraphs
+disconnected_subgraphs  # Should return a list of subgraph IDs
+
+# inspect the current state of subgraph connectivity
+ggplot() +
+  geom_sf(data = model_df, aes(fill = as.factor(subgraph_labels)), color = "black") +
+  scale_fill_viridis_d(option = "turbo", name = "Subgraph")  +
+  ggtitle("Current Subgraph Connectivity in South Korea") +
+  theme_minimal()
+
+# convert centroids to an sf object
+centroids <- st_centroid(model_df$geometry)
+centroids_sf <- st_as_sf(data.frame(id = 1:length(centroids), geometry = centroids))
+
+# iterate through each disconnected subgraph
+for (subgraph in disconnected_subgraphs) {
+  # find polygons in the current subgraph
+  subgraph_polygons <- which(subgraph_labels == subgraph)
+  
+  # find polygons in the largest subgraph (mainland)
+  mainland_polygons <- which(subgraph_labels == largest_subgraph)
+  
+  # find nearest polygon in the mainland for each polygon in the subgraph
+  closest_mainland <- st_nearest_feature(centroids_sf[subgraph_polygons, ], centroids_sf[mainland_polygons, ])
+  
+  # convert closest_mainland to integer indices
+  closest_mainland <- as.integer(closest_mainland)
+  
+  # update adjacency list to connect subgraph polygons to mainland
+  for (i in seq_along(subgraph_polygons)) {
+    island <- subgraph_polygons[i]
+    mainland <- closest_mainland[i]
+    
+    # ensure bidirectional connection
+    adj_list[[island]] <- unique(c(adj_list[[island]], mainland))
+    adj_list[[mainland]] <- unique(c(adj_list[[mainland]], island))
+  }
+}
+
+# identify which nodes have invalid `0` entries (0, 58) for example
+invalid_nodes <- which(sapply(adj_list, function(x) any(x == 0)))
+
+# rint the invalid nodes
+print(invalid_nodes)  # Should show 59, 177, 184, 190, etc.
+
+# loop through adj_list and remove zeroes
+adj_list <- lapply(adj_list, function(x) x[x != 0])
+
+# verify that 0s are gone
+nodes_to_check <- c(59, 177, 184, 190)
+print(adj_list[nodes_to_check])
+
+# recompute the graph after linking all subgraphs
+graph_adj <- graph_from_adj_list(adj_list, mode = "all")
+subgraph_labels <- components(graph_adj)$membership
+model_df$subgraph <- as.factor(subgraph_labels)
+
+# check if any disconnected subgraphs remain
+remaining_disconnected <- unique(subgraph_labels[subgraph_labels != largest_subgraph])
+
+if (length(remaining_disconnected) == 0) {
+  message("All regions are now fully connected.")
+} else {
+  message("Some subgraphs are still disconnected: ", paste(remaining_disconnected, collapse = ", "))
+}
+
+# visualise the updated subgraph connectivity
+ggplot() +
+  geom_sf(data = model_df, aes(fill = as.factor(subgraph_labels)), color = "black") +
+  scale_fill_viridis_d(option = "turbo", name = "Subgraph") +
+  ggtitle("Updated Subgraph Connectivity in South Korea") +
+  theme_minimal()
+
+View(graph_adj)
+
+# convert the updated graph to an adjacency matrix
+adjacency_matrix <- as_adjacency_matrix(graph_adj, sparse = TRUE)
+
+adjacency_matrix <- Matrix::Matrix(as(adjacency_matrix, "sparseMatrix") > 0, sparse = TRUE)
+
+adjacency_matrix
 ```
 
 ```{r}
-# the extract_components object contains the following key elements:
+# extract the components for the ICAR model using the prep_icar_data function
+extract_components <- prep_icar_data(adjacency_matrix)
 
+# the extract_components object contains the following key elements:
 # group_size is the total number of areal units observed in the shapefile
 # node1 are indexes of the regions of interest - the focal areas in the adjacency matrix
 # node2 shows corresponding neighbouring regions that are connected to the regions in node1. This defines spatial relationships
@@ -780,31 +857,98 @@ extract_components <- prep_icar_data(adjacency_matrix)
 
 # extract key elements
 n <- as.numeric(extract_components$group_size)
-node1 <- extract_components$node1
-node2 <- extract_components$node2
+nod1 <- extract_components$node1
+nod2 <- extract_components$node2
 n_edges <- as.numeric(extract_components$n_ed)
 ```
 
-Create the dataset to be compiled in Stan
+7.4. Create the Dataset to be compiled in Stan
 
 ```{r}
-# we need to define the variables needed to be compiled in Stan
-stan_spatial_dataset <- list(N = nrow(model_df_sp), # number of spatial units (municipalities)
-                            N_edges = n_edges, # number of edges for ICAR model
-                            node1 = node1, # adjacency structure
-                            node2 = node2, # adjacency structure
-                            
-                            suicide = model_df_sp$suicide_count, # outcome variable (counts)
-                            sph_ratio = model_df_sp$single_person_household_ratio, # independent variables
-                            stress_rate = model_df_sp$stress_awareness_rate,
-                            unemp_rate = model_df_sp$unemployment_rate,
-                            unmet_med = model_df_sp$unmet_medical_needs_rate,
-                            pop_dens = model_df_sp$population_density_km2,
-                            off_set = model_df_sp$expected_num, # row expected cases
-                            overdispersion_parameter = 1.28132) # over-dispersion parameter from negative binomial regression
+# the outcome suicide_count, independent variables single_person_household_ratio, stress_awareness_rate, unemployment_rate, unmet_medical_needs_rate, and the offset variable expected_num need to be extracted into separate vectors
+y <- model_df$suicide_count # outcome variable (suicide casualties)
+# extract multiple independent variables into a matrix
+X <- model_df %>%
+  st_drop_geometry() %>%
+  dplyr::select(single_person_household_ratio, 
+                stress_awareness_rate,
+                unemployment_rate, 
+                unmet_medical_needs_rate) %>%
+  as.matrix()
+e <- model_df$expected_num
+```
 
+```{r}
+stan_spatial_dataset <- list(
+  N = nrow(model_df) , # number of spatial units
+  N_edges = n_edges, # number of edges in spatial adjacency structure
+  node1 = nod1, # first node in adjacency structure
+  node2 = nod2, # second node in adjacency structure
+  Y = y, # outcome variable (suicide casualties)
+  X = X, # matrix of independent variables (3 predictors)
+  K = ncol(X), # number of independent variables (3)
+  Off_set = e # offset variable (expected_num)
+)
+
+# inspect
 stan_spatial_dataset
+```
 
-# if the over-dispersion parameter is ... do i ues poisson model or negative binomial poisson model?
+7.5. Compiling Stan code for Spatial ICAR Risk Modelling
+
+7.5.1. Printing of the Global Results
+
+```{r}
+# start the clock
+ptm <- proc.time()
+
+# fit icar_poisson_stan model
+icar_poisson_fit = stan("icar_poisson_model.stan",
+                        data = stan_spatial_dataset,
+                        iter = 12000,
+                        warmup = 6000,
+                        control = list(adapt_delta = 0.99, max_treedepth = 12),
+                        chain = 6,
+                        verbose = FALSE)
+
+# stop the clock
+proc.time() - ptm
+```
+
+```{r}
+# we can see our estimated results for alpha, beta, and sigma
+options(scipen = 999)
+summary(icar_poisson_fit, pars=c("alpha", "beta", "sigma"), probs=c(0.025, 0.975))$summary
+
+View(icar_poisson_fit)
+```
+
+```{r}
+exp(-0.038103413)
+```
+
+
+```{r}
+cor_matrix <- cor(model_df[, c("single_person_household_ratio", 
+                               "stress_awareness_rate", 
+                               "unemployment_rate", 
+                               "unmet_medical_needs_rate")])
+print(cor_matrix)
+```
+
+```{r}
+# print full table to avoid some rows from being omitted.
+options(max.print = 100000)
+# print the results
+print(icar_poisson_fit, pars=c("alpha", "beta", "rr_alpha", "rr_beta", "rr_mu", "sigma"), probs=c(0.025, 0.975))
+```
+
+```{r}
+# diagnostic check on the rHats - put everything into a data frame
+diagnostic.checks <- as.data.frame(summary(icar_poisson_fit, pars=c("alpha", "beta", "rr_alpha", "rr_beta", "rr_mu", "sigma", "phi", "lp__"), probs=c(0.025, 0.5, 0.975))$summary)
+# create binary variable
+diagnostic.checks$valid <- ifelse(diagnostic.checks$Rhat < 1.05, 1, 0)
+# tabulate it
+table(diagnostic.checks$valid)
 ```
 
