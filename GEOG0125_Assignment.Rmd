@@ -650,7 +650,7 @@ model_df <- suicide_rate_municipality %>%
   # round to the nearest integer for modelling purposes
   dplyr::mutate(suicide_count = as.integer(round(total_population * suicide_rate / 100000, 0))) %>% 
   # select rename relevant columns and keep only necessary variables for modelling
-  dplyr::select(code, municipality_en, suicide_count, single_person_household_ratio, stress_awareness_rate, unemployment_rate, unmet_medical_needs_rate, population_density_km2, total_population) %>% 
+  dplyr::select(code, municipality_en, suicide_count, suicide_rate, single_person_household_ratio, stress_awareness_rate, unemployment_rate, unmet_medical_needs_rate, population_density_km2, total_population) %>% 
   # rename 'municipality_en' to 'name'
   dplyr::rename(name = municipality_en)
 ```
@@ -835,13 +835,11 @@ ggplot() +
   ggtitle("Updated Subgraph Connectivity in South Korea") +
   theme_minimal()
 
-View(graph_adj)
-
 # convert the updated graph to an adjacency matrix
 adjacency_matrix <- as_adjacency_matrix(graph_adj, sparse = TRUE)
-
 adjacency_matrix <- Matrix::Matrix(as(adjacency_matrix, "sparseMatrix") > 0, sparse = TRUE)
 
+# inspect
 adjacency_matrix
 ```
 
@@ -863,6 +861,37 @@ n_edges <- as.numeric(extract_components$n_ed)
 ```
 
 7.4. Create the Dataset to be compiled in Stan
+
+```{r}
+# exploratory plotting to estimate individual variable's relationship with target variable
+target_var <- "suicide_rate"
+predictors <- c("single_person_household_ratio", 
+                "stress_awareness_rate", 
+                "unemployment_rate", 
+                "unmet_medical_needs_rate")
+
+# loop through each predictor and create scatterplots
+for (predictor in predictors) {
+  p <- ggplot(model_df, aes_string(x = predictor, y = target_var)) +
+    geom_point(alpha = 0.5) +  # scatter points with transparency
+    geom_smooth(method = "lm", color = "blue", se = TRUE) +  # dd regression line
+    theme_minimal() +
+    labs(title = paste("Scatterplot of", predictor, "vs", target_var),
+         x = predictor,
+         y = target_var) +
+    theme(plot.title = element_text(hjust = 0.5)) # center the title
+  
+  print(p)  # display the plot
+}
+
+View(model_df)
+```
+
+```{r}
+# inspect multi-collinearity before progresssing with above variables
+# none of the variables have correlations above 0.7 or below -0.7, so we can move forward with these variables
+cor(X)
+```
 
 ```{r}
 # the outcome suicide_count, independent variables single_person_household_ratio, stress_awareness_rate, unemployment_rate, unmet_medical_needs_rate, and the offset variable expected_num need to be extracted into separate vectors
@@ -905,9 +934,9 @@ ptm <- proc.time()
 # fit icar_poisson_stan model
 icar_poisson_fit = stan("icar_poisson_model.stan",
                         data = stan_spatial_dataset,
-                        iter = 12000,
-                        warmup = 6000,
-                        control = list(adapt_delta = 0.99, max_treedepth = 12),
+                        iter = 20000,
+                        warmup = 10000,
+                        control = list(max_treedepth = 12),
                         chain = 6,
                         verbose = FALSE)
 
@@ -916,24 +945,18 @@ proc.time() - ptm
 ```
 
 ```{r}
+# save the fitted model locally
+saveRDS(icar_poisson_fit, file = "icar_poisson_fit.rds")
+# load the model later:
+# icar_poisson_fit <- readRDS("icar_poisson_fit.rds")
+```
+
+
+```{r}
 # we can see our estimated results for alpha, beta, and sigma
+# all rHAT values are below 1.05, indicating that the iteration performed well
 options(scipen = 999)
 summary(icar_poisson_fit, pars=c("alpha", "beta", "sigma"), probs=c(0.025, 0.975))$summary
-
-View(icar_poisson_fit)
-```
-
-```{r}
-exp(-0.038103413)
-```
-
-
-```{r}
-cor_matrix <- cor(model_df[, c("single_person_household_ratio", 
-                               "stress_awareness_rate", 
-                               "unemployment_rate", 
-                               "unmet_medical_needs_rate")])
-print(cor_matrix)
 ```
 
 ```{r}
@@ -941,14 +964,260 @@ print(cor_matrix)
 options(max.print = 100000)
 # print the results
 print(icar_poisson_fit, pars=c("alpha", "beta", "rr_alpha", "rr_beta", "rr_mu", "sigma"), probs=c(0.025, 0.975))
+
+# rHAT- all values are ≈ 1, which means the model has converged well across all chains
+# effective samples size (n_eff) are all quite lare, indicating low autocorrelation in the Markov Chains (larger n_eff means more precise estimates)
+
+# single_person_household_ratio and unmet_medical_needs_rate have slightly positive associations with suicide rate
+# unemployment_rate has a borderline significant, negative association with suicide rate
+# stress_awareness_rate has a small, borderline significant negative effect close to 0
+
+# relative risk estimates
+# single_person_household_ratio (1.01) -> 1% increase in risk per unit increase
+# stress_awareness_rate (0.99) -> 1% decrease in risk per unit increase
+# unemployment_rate (0.96) -> 4% decrease in risk per unit increase (strongest effect)
+# unmet_medical_needs_rate (1.01) -> 1% increase in risk per unit increase
+
+# alpha (global baseline)
+# alpha of -0.20 (95% CrI: -0.45 - 0.07) indicates a small negative baseline risk for suicide rates
+
+# sigma (standard deviation)
+# sigma of 0.21 (95% CrI: 0.16 to 0.27) indicates the overall variance in the model
 ```
 
 ```{r}
-# diagnostic check on the rHats - put everything into a data frame
-diagnostic.checks <- as.data.frame(summary(icar_poisson_fit, pars=c("alpha", "beta", "rr_alpha", "rr_beta", "rr_mu", "sigma", "phi", "lp__"), probs=c(0.025, 0.5, 0.975))$summary)
+# rapid diagnostics of the rHATs
+# diagnostic check on the rHats by putting everything into a data frame
+diagnostic_checks <- as.data.frame(summary(icar_poisson_fit, pars=c("alpha", "beta", "rr_alpha", "rr_beta", "rr_mu", "sigma", "phi", "lp__"), probs=c(0.025, 0.5, 0.975))$summary)
+
 # create binary variable
-diagnostic.checks$valid <- ifelse(diagnostic.checks$Rhat < 1.05, 1, 0)
+diagnostic_checks$valid <- ifelse(diagnostic_checks$Rhat < 1.05, 1, 0)
+
 # tabulate it
-table(diagnostic.checks$valid)
+table(diagnostic_checks$valid)
+
+# all output parameters have an rHAT < 1.05
+# it is always good to run about 10000, 15000 or more iterations, as usually shorter iterations yield low effective sample sizes after warn-up samples are discarded - this my lead to complications that cause rHATs to be above 1.05
+```
+
+```{r}
+# extraction of area-specific relative risks
+head(summary(icar_poisson_fit, pars = c("rr_mu"), probs = c(0.025, 0.975))$summary)
+# we see the relative risk (RR) estimates for the first areas under the column mu with their corresponding credibility limits (2.5% and 97.5%)
+```
+
+```{r}
+# extract key posterior results for the generated quantities
+relative_risk_results <- as.data.frame(summary(icar_poisson_fit, pars=("rr_mu"), probs = c(0.025, 0.975))$summary)
+
+# clean this table up
+row.names(relative_risk_results) <- 1:nrow(relative_risk_results)
+
+# check for validity of rHATs 
+relative_risk_results$valid <- ifelse(relative_risk_results$Rhat < 1.05, 1, 0)
+
+# rearrange the column into order
+relative_risk_results <- relative_risk_results[, c(1, 4, 5, 7, 8)]
+
+# rename the columns appropriately
+colnames(relative_risk_results)[1] <- "rr"
+colnames(relative_risk_results)[2] <- "rrlower"
+colnames(relative_risk_results)[3] <- "rrupper"
+colnames(relative_risk_results)[4] <- "rHAT"
+
+# inspect clean table
+head(relative_risk_results)
+```
+
+```{r}
+# insert these columns into our model_df
+model_df$rr <- relative_risk_results[, "rr"]
+model_df$rrlower <- relative_risk_results[, "rrlower"]
+model_df$rrupper <- relative_risk_results[, "rrupper"]
+```
+
+```{r}
+# these relative will allow us to see the mapped risks of suicide across South Korean municipalities
+# as well also want a supporting map indicating whether the risks are significant or not, we create an extra column in model_df called significance
+model_df$significance <- NA
+model_df$significance[model_df$rrlower < 1 & model_df$rrupper > 1] <- 0 # not significant
+model_df$significance[model_df$rrlower == 1 | model_df$rrupper == 1] <- 0 # not significant
+model_df$significance[model_df$rrlower > 1 & model_df$rrupper > 1] <- 1 # significant increase
+model_df$significance[model_df$rrlower < 1 & model_df$rrupper < 1] <- -1 # significant decrease
+```
+
+```{r}
+# map design for relative risk - you want to understand or get a handle on what the distribution for risks look like
+summary(model_df$rr)
+hist(model_df$rr)
+
+# Refined risk categories for better separation
+risk_category_list <- c(
+  "≤0.75", 
+  "0.76 to 0.85",
+  "0.86 to 0.95",
+  "0.96 to 1.00", 
+  "1.01 to 1.05", 
+  "1.06 to 1.10", 
+  "1.11 to 1.18",  
+  "1.19 to 1.25",  
+  "1.26 to 1.50", 
+  ">1.50"
+)
+
+# Define updated colour palette
+RRPalette <- c(
+  "#4575B4",  # Dark blue (≤ 0.75)
+  "#5EA9D4",  # Medium blue (0.76 - 0.85)
+  "#74ADD1",  # Light blue (0.86 - 0.95)
+  "#ABD9E9",  # Pale blue (0.96 - 1.00)
+  "#E0F3F8",  # Very light blue (1.01 - 1.05)
+  "#FFFFBF",  # White-yellow (1.06 - 1.10)
+  "#FEE08B",  # Light orange (1.11 - 1.18)
+  "#FDAE61",  # Orange (1.19 - 1.25)
+  "#F46D43",  # Dark orange-red (1.26 - 1.50)
+  "#A50026"   # Deep red (> 1.50)
+)
+
+# Assign refined risk categories
+model_df$relative_risk_cat <- NA
+model_df$relative_risk_cat[model_df$rr <= 0.75] <- -4
+model_df$relative_risk_cat[model_df$rr > 0.75 & model_df$rr <= 0.85] <- -3
+model_df$relative_risk_cat[model_df$rr > 0.85 & model_df$rr <= 0.95] <- -2
+model_df$relative_risk_cat[model_df$rr > 0.95 & model_df$rr <= 1.00] <- -1
+model_df$relative_risk_cat[model_df$rr > 1.00 & model_df$rr <= 1.05] <- 0
+model_df$relative_risk_cat[model_df$rr > 1.05 & model_df$rr <= 1.10] <- 1
+model_df$relative_risk_cat[model_df$rr > 1.10 & model_df$rr <= 1.18] <- 2
+model_df$relative_risk_cat[model_df$rr > 1.18 & model_df$rr <= 1.25] <- 3
+model_df$relative_risk_cat[model_df$rr > 1.25 & model_df$rr <= 1.50] <- 4
+model_df$relative_risk_cat[model_df$rr > 1.50] <- 5
+
+# check the category distribution
+table(model_df$relative_risk_cat)
+```
+
+```{r}
+# map of relative risk
+rr_map <- tm_shape(model_df) + 
+    tm_fill("relative_risk_cat",
+            style = "cat",
+            title = "Relavtive Risk",
+            palette = RRPalette,
+            labels = risk_category_list) +
+    tm_shape(model_df) +
+    tm_polygons(alpha = 0.05) +
+    # tm_text("name", size = "AREA") +
+    tm_layout(frame = FALSE,
+              legend.outside = TRUE,
+              legend.title.size = 0.8,
+              legend.text.size = 0.7) +
+    tm_compass(position = c("right", "top")) +
+    tm_scale_bar(position = c("right", "bottom")) +
+    tm_layout(
+      main.title = "Relative Risk of Suicide Across South Korean Municipalities",
+      main.title.size = 1.2,
+      main.title.position = c("center", "top"),
+      frame = FALSE,
+      legend.outside = TRUE,
+      legend.title.size = 0.8,
+      legend.text.size = 0.7
+    )
+
+# inspect
+rr_map
+
+# map of significance regions
+sg_map <- tm_shape(model_df) + 
+    tm_fill("significance",
+            style = "cat",
+            title = "Significance Categories",
+            palette = c("#33a6fe", "white", "#fe0000"),
+            labels = c("Significantly low", "Not Significant", "Significantly high")) +
+    tm_shape(model_df) +
+    tm_polygons(alpha = 0.05) +
+    # tm_text("name", size = "AREA") +
+    tm_layout(frame = FALSE,
+              legend.outside = TRUE,
+              legend.title.size = 0.8,
+              legend.text.size = 0.7) +
+    tm_compass(position = c("right", "top")) +
+    tm_scale_bar(position = c("right", "bottom")) +
+    tm_layout(
+      main.title = "Significance of Suicide Risk Across South Korean Municipalities",
+      main.title.size = 1.2,
+      main.title.position = c("center", "top"),
+      frame = FALSE,
+      legend.outside = TRUE,
+      legend.title.size = 0.8,
+      legend.text.size = 0.7
+    )
+
+# inspect
+sg_map
+
+# create side-by-side plot
+# tmap_arrange(rr_map, sg_map, ncol = 2, nrow = 1)
+```
+
+```{r}
+# exceedance probabilities allows the user the quantify the levels of uncertainty surrounding the riks we quantified
+# we can use a threshold for instance RR > 1 and ask what is the probability that an area has an excess risk of suicide casualties and viualise as well
+# for this extraction, we need to use functions from the tidybayes and tidyverse packages i.e. spread_draws(), group_by(), summarise(), and pull()
+# extract the exceedance probabilities from the icar_poisson_fit object and compute the probability that an area has a relative riks raio > 1.0
+threshold <- function(x){mean(x > 1.00)}
+
+exceedance_probability <- icar_poisson_fit %>%
+  spread_draws(rr_mu[i]) %>% 
+  group_by(i) %>% 
+  summarise(rr_mu=threshold(rr_mu)) %>% 
+  pull(rr_mu)
+
+# insert the exceedance values into model_df
+model_df$exceedance_probability <- exceedance_probability
+```
+
+```{r}
+# create the labels for the probabilities
+prob_cat_list <- c("<0.01", "0.01-0.09", "0.10-0.19", "0.20-0.29", "0.30-0.39", "0.40-0.49","0.50-0.59", "0.60-0.69", "0.70-0.79", "0.80-0.89", "0.90-0.99", "1.00")
+
+# categorising the probabilities in bands of 10s
+model_df$prob_cat <- NA
+model_df$prob_cat[model_df$exceedance_probability>=0 & model_df$exceedance_probability< 0.01] <- 1
+model_df$prob_cat[model_df$exceedance_probability>=0.01 & model_df$exceedance_probability< 0.10] <- 2
+model_df$prob_cat[model_df$exceedance_probability>=0.10 & model_df$exceedance_probability< 0.20] <- 3
+model_df$prob_cat[model_df$exceedance_probability>=0.20 & model_df$exceedance_probability< 0.30] <- 4
+model_df$prob_cat[model_df$exceedance_probability>=0.30 & model_df$exceedance_probability< 0.40] <- 5
+model_df$prob_cat[model_df$exceedance_probability>=0.40 & model_df$exceedance_probability< 0.50] <- 6
+model_df$prob_cat[model_df$exceedance_probability>=0.50 & model_df$exceedance_probability< 0.60] <- 7
+model_df$prob_cat[model_df$exceedance_probability>=0.60 & model_df$exceedance_probability< 0.70] <- 8
+model_df$prob_cat[model_df$exceedance_probability>=0.70 & model_df$exceedance_probability< 0.80] <- 9
+model_df$prob_cat[model_df$exceedance_probability>=0.80 & model_df$exceedance_probability< 0.90] <- 10
+model_df$prob_cat[model_df$exceedance_probability>=0.90 & model_df$exceedance_probability< 1.00] <- 11
+model_df$prob_cat[model_df$exceedance_probability == 1.00] <- 12
+
+# check to see if legend scheme is balanced
+table(model_df$prob_cat)
+
+View(model_df)
+```
+
+```{r}
+# map of exceedance probabilities
+tm_shape(model_df) + 
+    tm_fill("prob_cat", style = "cat", title = "Probability", palette = "GnBu", labels = prob_cat_list) +
+    tm_shape(model_df) +
+    tm_polygons(alpha = 0.05, border.col = "black") +
+    # tm_text("name", size = "AREA") +
+    tm_layout(frame = FALSE, legend.outside = TRUE, legend.title.size = 0.8, legend.text.size = 0.7) +
+    tm_compass(position = c("right", "top")) +
+    tm_scale_bar(position = c("right", "bottom"))
+
+# the map display exceedance probabilities for suicide risk across South Korea, providing a spatial visualisation of regions where the risk surpasses a given threshold
+# the probability values range from <0.01 (very low risk) to 1.00 (very high risk), illustrating the heterogeneity of suicide risk across different administrative areas
+# Seoul and surrounding metropolitan areas exhibit lower exceedance probabilities (0.01 - 0.39)
+# this suggests that the relative suicide risk is lower in the capital regions compared to other parts of the country
+# the majority of the country, particularly rural and peripheral regions, exhibit higher exceedance probabilities (0.50 - 1.00)
+# metropolitan cities in general show lower levels of suicide risk compared to those of rural areas
+# there seems to be a strong evidence of spatial clustering
 ```
 
