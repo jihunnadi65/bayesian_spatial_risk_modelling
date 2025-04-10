@@ -79,6 +79,28 @@ sk_municipalities_2022 <- st_read(here::here("SIG_20221119", "sig.shp"), options
   )
 ```
 
+```{r}
+# load the South Korean provinces (Province, Special City, Metropolitan City) dataset based on 2022 boundaries (for supplementary mapping)
+sk_provinces_2022 <- st_read(here::here("SD_20221119", "ctp_rvn.shp"), options = "ENCODING=CP949") %>% 
+  # select only the relevant columns
+  dplyr::select(CTPRVN_CD, CTP_ENG_NM) %>% 
+  # rename columns for better readability
+  dplyr::rename(
+    code = CTPRVN_CD,
+    name = CTP_ENG_NM
+  ) %>% 
+  dplyr::mutate(
+    name = dplyr::case_when(
+      name == "Jellanam-do" ~ "Jeollanam-do",
+      TRUE ~ name
+    )
+  )
+
+# inspect
+qtm(sk_provinces_2022)
+```
+
+
 2.2. Loading Municipalities Mapping Data
 
 ```{r}
@@ -314,17 +336,42 @@ sum(!st_is_valid(suicide_rate_municipality)) # should return 0 if all are valid
 # set tmap to interactive mode
 tmap_mode("plot")
 
+palette = c("#fef0f0", "#fcd3d3", "#f8a8a8", "#f07575", "#d94747")
+palette_2 = c("#fdf6f6", "#f9d9db", "#f6a9b2", "#ec646b", "#d53039")
+
 # generate the suicide rate thematic map
-tm_shape(suicide_rate_municipality) +
+sk_suicide_map_2022 <- tm_shape(suicide_rate_municipality) +
   tm_polygons("suicide_rate",
-              title = "Suicides per 100,000 People",
-              palette = "Reds",
+              title = "Suicides per\n100,000 People",
+              palette = palette_2,
               border.col= "black",
-              border.alpha= 0.1,
+              border.alpha= 0.2,
               style = "quantile") +
-  tm_layout(main.title = "Suicide Rates Across South Korea (2022)",
-            main.title.position = "center",
-            main.title.size = 1.2)
+  tm_scale_bar(width = 0.1, text.size = 0.4, position = c("left", "bottom")) +
+  tm_compass(size = 1, type = "arrow", position = c("right", "top")) +
+  tm_layout(
+            # main.title = "Suicide Rates Across South Korea (2022)",
+            # main.title.position = "center",
+            # main.title.size = 1.2,
+            legend.frame = TRUE,
+            legend.position = c("right", "bottom"),
+            legend.title.size = 0.9,
+            legend.text.size = 0.7,
+            frame = TRUE) +
+tm_shape(sk_provinces_2022) +
+  tm_borders(lwd = 1, col = "black") # thicker border
+
+# save the current tmap as a PNG image in the "assets" folder
+tmap_save(tm = sk_suicide_map_2022,
+          filename = here::here("assets", "sk_suicide_map_2022.png"),
+          width = 7,      # width in inches
+          height = 9,    # height in inches
+          dpi = 300,      # high-resolution
+         )
+```
+
+```{r}
+sk_suicide_map_2022
 ```
 
 5. Loading Predictor Variables
@@ -659,45 +706,45 @@ model_df <- suicide_rate_municipality %>%
 
 ```{r}
 # # quick diagnosis with variance-to-mean ratio
-# var(model_df$suicide_count) / mean(model_df$suicide_count)
-# 
-# var(model_df$suicide_count)
-# 
+var(model_df$suicide_count) / mean(model_df$suicide_count)
+
+var(model_df$suicide_count)
+
 # # Create histogram for suicide counts
-# ggplot(model_df, aes(x = suicide_count)) +
-#   geom_histogram(binwidth = 5, fill = "darkblue", color = "white", alpha = 0.7) +
-#   geom_density(aes(y = ..count.. * 5), color = "red", size = 1) +
-#   labs(title = "Reported Number of Suicide in Korean Municipalities",
-#        x = "Suicide Counts",
-#        y = "Frequency") +
-#   theme_minimal() +
-#   theme(plot.title = element_text(hjust = 0.5, face = "bold"),
-#         axis.title = element_text(size = 12),
-#         axis.text = element_text(size = 10))
-# 
+ggplot(model_df, aes(x = suicide_count)) +
+  geom_histogram(binwidth = 5, fill = "darkblue", color = "white", alpha = 0.7) +
+  geom_density(aes(y = ..count.. * 5), color = "red", size = 1) +
+  labs(title = "Reported Number of Suicide in Korean Municipalities",
+       x = "Suicide Counts",
+       y = "Frequency") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        axis.title = element_text(size = 12),
+        axis.text = element_text(size = 10))
+
 # # see lowest count
-# min(model_df$suicide_count)
-# # see highest count
-# max(model_df$suicide_count)
-# 
-# # since we are considering using the Negative Binomial Poisson Regression, let us estimate the over-dispersion parameter using the glm.nb() function
-# 
+min(model_df$suicide_count)
+# see highest count
+max(model_df$suicide_count)
+
+# since we are considering using the Negative Binomial Poisson Regression, let us estimate the over-dispersion parameter using the glm.nb() function
+
 # # fit negative binomial regression null model
-# nb_model <- glm.nb(suicide_count ~ 1, data=model_df)
-# 
+nb_model <- glm.nb(suicide_count ~ 1, data=model_df)
+
 # # extract theta
-# theta <- nb_model$theta
-# 
-# theta
-# 
-# # the estimated over-dispersion parameter is 1.28132
-# # the theta (dispersion) parameter in a negatival binomial model controls the degree of overdispersion relative to a Poisson distribution
-# # a higher theta value suggests less overdisperison, while a lower theta value suggests more overdispersion
-# # my value is 1.28132, meaning the suicide_count data is overdispersed but not extremely so
-# # in a Poisson regression, the variance equals the mean (Var(Y) = E(Y))
-# # in a negative binomial model, variance is greater than the mean: Var(Y) = mu + mu^2 / theta
-# # NB model can be used to characterise count data where the majority of data points are clustered toward lower values of a variable
-# # When choosing between a negative binomial model and a Poisson model, use a negative binomial model if your count data exhibits overdispersion (variance greater than the mean), while a Poisson model is suitable when the variance is roughly equal to the mean in your count data; essentially, the negative binomial model is a more flexible option that can handle situations where the Poisson model's assumptions are not met
+theta <- nb_model$theta
+
+theta
+
+# the estimated over-dispersion parameter is 1.28132
+# the theta (dispersion) parameter in a negative binomial model controls the degree of overdispersion relative to a Poisson distribution
+# a higher theta value suggests less overdisperison, while a lower theta value suggests more overdispersion
+# my value is 1.28132, meaning the suicide_count data is overdispersed but not extremely so
+# in a Poisson regression, the variance equals the mean (Var(Y) = E(Y))
+# in a negative binomial model, variance is greater than the mean: Var(Y) = mu + mu^2 / theta
+# NB model can be used to characterise count data where the majority of data points are clustered toward lower values of a variable
+# When choosing between a negative binomial model and a Poisson model, use a negative binomial model if your count data exhibits overdispersion (variance greater than the mean), while a Poisson model is suitable when the variance is roughly equal to the mean in your count data; essentially, the negative binomial model is a more flexible option that can handle situations where the Poisson model's assumptions are not met
 
 # Three types of Poisson models
 # 
@@ -745,10 +792,10 @@ model_df_sp <- as(model_df, "Spatial")
 adj_list <- poly2nb(model_df_sp, queen = TRUE, snap = 200)
 
 # inspect adj_list
-# the list has 6 subgraphs and 4 isoalted regions (59, 177, 184, 190) with no links
+# the list has 6 subgraphs and 4 isolated regions (59, 177, 184, 190) with no links
 adj_list
 
-# we need to convert the list-based adjacency strucuture into an igraph object to analyse connected components
+# we need to convert the list-based adjacency structure into an igraph object to analyse connected components
 graph_adj <- graph_from_adj_list(adj_list, mode = "all")
 
 # identify subgraph components
@@ -804,7 +851,7 @@ for (subgraph in disconnected_subgraphs) {
 # identify which nodes have invalid `0` entries (0, 58) for example
 invalid_nodes <- which(sapply(adj_list, function(x) any(x == 0)))
 
-# rint the invalid nodes
+# print the invalid nodes
 print(invalid_nodes)  # Should show 59, 177, 184, 190, etc.
 
 # loop through adj_list and remove zeroes
@@ -879,18 +926,13 @@ for (predictor in predictors) {
     labs(title = paste("Scatterplot of", predictor, "vs", target_var),
          x = predictor,
          y = target_var) +
+    theme_classic() +
     theme(plot.title = element_text(hjust = 0.5)) # center the title
   
   print(p)  # display the plot
 }
 
 View(model_df)
-```
-
-```{r}
-# inspect multi-collinearity before progresssing with above variables
-# none of the variables have correlations above 0.7 or below -0.7, so we can move forward with these variables
-cor(X)
 ```
 
 ```{r}
@@ -946,9 +988,9 @@ proc.time() - ptm
 
 ```{r}
 # save the fitted model locally
-saveRDS(icar_poisson_fit, file = "icar_poisson_fit.rds")
+# saveRDS(icar_poisson_fit, file = "icar_poisson_fit.rds")
 # load the model later:
-# icar_poisson_fit <- readRDS("icar_poisson_fit.rds")
+icar_poisson_fit <- readRDS("icar_poisson_fit.rds")
 ```
 
 
@@ -1097,70 +1139,74 @@ table(model_df$relative_risk_cat)
 ```
 
 ```{r}
-# map of relative risk
 rr_map <- tm_shape(model_df) + 
-    tm_fill("relative_risk_cat",
-            style = "cat",
-            title = "Relavtive Risk",
-            palette = RRPalette,
-            labels = risk_category_list) +
-    tm_shape(model_df) +
-    tm_polygons(alpha = 0.05) +
-    # tm_text("name", size = "AREA") +
-    tm_layout(frame = FALSE,
-              legend.outside = TRUE,
-              legend.title.size = 0.8,
-              legend.text.size = 0.7) +
-    tm_compass(position = c("right", "top")) +
-    tm_scale_bar(position = c("right", "bottom")) +
-    tm_layout(
-      main.title = "Relative Risk of Suicide Across South Korean Municipalities",
-      main.title.size = 1.2,
-      main.title.position = c("center", "top"),
-      frame = FALSE,
-      legend.outside = TRUE,
-      legend.title.size = 0.8,
-      legend.text.size = 0.7
-    )
+   tm_polygons("relative_risk_cat",
+              style = "cat",
+              title = "Relative Risk",
+              palette = RRPalette,
+              labels = risk_category_list,
+              border.col = "black",
+              border.alpha = 0.2) +
+tm_shape(sk_provinces_2022) +
+  tm_borders(lwd = 1, col = "black") +
+  tm_scale_bar(position = c("left", "bottom"), width = 0.1, text.size = 0.4) +
+  tm_compass(position = c("right", "top"), size = 1, type = "arrow") +
+  tm_layout(
+    frame = TRUE,
+    legend.title.size = 0.9,
+    legend.text.size = 0.7,
+    legend.frame = TRUE
+  )
+
 
 # inspect
 rr_map
 
+# save the tmap as a PNG image in the "assets" folder
+tmap_save(tm = rr_map,
+          filename = here::here("assets", "relative_risk_map_2022.png"),
+          width = 7,      # width in inches
+          height = 9,    # height in inches
+          dpi = 300,      # high-resolution
+         )
+
 # map of significance regions
 sg_map <- tm_shape(model_df) + 
-    tm_fill("significance",
-            style = "cat",
-            title = "Significance Categories",
-            palette = c("#33a6fe", "white", "#fe0000"),
-            labels = c("Significantly low", "Not Significant", "Significantly high")) +
-    tm_shape(model_df) +
-    tm_polygons(alpha = 0.05) +
-    # tm_text("name", size = "AREA") +
-    tm_layout(frame = FALSE,
-              legend.outside = TRUE,
-              legend.title.size = 0.8,
-              legend.text.size = 0.7) +
-    tm_compass(position = c("right", "top")) +
-    tm_scale_bar(position = c("right", "bottom")) +
-    tm_layout(
-      main.title = "Significance of Suicide Risk Across South Korean Municipalities",
-      main.title.size = 1.2,
-      main.title.position = c("center", "top"),
-      frame = FALSE,
-      legend.outside = TRUE,
-      legend.title.size = 0.8,
-      legend.text.size = 0.7
-    )
+  tm_polygons("significance",
+              style = "cat",
+              title = "Significance Categories",
+              palette = c("#33a6fe", "white", "#fe0000"),
+              labels = c("Significantly low", "Not Significant", "Significantly high"),
+              border.col = "black",
+              border.alpha = 0.2) +
+  tm_shape(sk_provinces_2022) +
+    tm_borders(lwd = 1, col = "black") +
+  tm_scale_bar(position = c("left", "bottom"), width = 0.1, text.size = 0.4) +
+  tm_compass(position = c("right", "top"), size = 1, type = "arrow") +
+  tm_layout(
+    frame = TRUE,
+    legend.title.size = 0.9,
+    legend.text.size = 0.7,
+    legend.frame = TRUE
+  )
 
 # inspect
 sg_map
+
+# save the tmap as a PNG image in the "assets" folder
+tmap_save(tm = sg_map,
+          filename = here::here("assets", "significance_categories_map_2022.png"),
+          width = 7,      # width in inches
+          height = 9,    # height in inches
+          dpi = 300,      # high-resolution
+         )
 
 # create side-by-side plot
 # tmap_arrange(rr_map, sg_map, ncol = 2, nrow = 1)
 ```
 
 ```{r}
-# exceedance probabilities allows the user the quantify the levels of uncertainty surrounding the riks we quantified
+# exceedance probabilities allows the user the quantify the levels of uncertainty surrounding the risk we quantified
 # we can use a threshold for instance RR > 1 and ask what is the probability that an area has an excess risk of suicide casualties and viualise as well
 # for this extraction, we need to use functions from the tidybayes and tidyverse packages i.e. spread_draws(), group_by(), summarise(), and pull()
 # extract the exceedance probabilities from the icar_poisson_fit object and compute the probability that an area has a relative riks raio > 1.0
@@ -1204,13 +1250,31 @@ View(model_df)
 ```{r}
 # map of exceedance probabilities
 tm_shape(model_df) + 
-    tm_fill("prob_cat", style = "cat", title = "Probability", palette = "GnBu", labels = prob_cat_list) +
-    tm_shape(model_df) +
-    tm_polygons(alpha = 0.05, border.col = "black") +
-    # tm_text("name", size = "AREA") +
-    tm_layout(frame = FALSE, legend.outside = TRUE, legend.title.size = 0.8, legend.text.size = 0.7) +
-    tm_compass(position = c("right", "top")) +
-    tm_scale_bar(position = c("right", "bottom"))
+    tm_polygons("prob_cat",
+            style = "cat",
+            title = "Probability",
+            palette = "GnBu",
+            labels = prob_cat_list,
+            border.col = "black",
+            border.alpha = 0.2) +
+tm_shape(sk_provinces_2022) +
+    tm_borders(lwd = 1, col = "black") +
+tm_scale_bar(position = c("left", "bottom"), width = 0.1, text.size = 0.4) +
+tm_compass(position = c("right", "top"), size = 1, type = "arrow") +
+tm_layout(
+    frame = TRUE,
+    legend.title.size = 0.9,
+    legend.text.size = 0.7,
+    legend.frame = TRUE
+  )
+
+# save the tmap as a PNG image in the "assets" folder
+tmap_save(tm = sg_map,
+          filename = here::here("assets", "significance_categories_map_2022.png"),
+          width = 7,      # width in inches
+          height = 9,    # height in inches
+          dpi = 300,      # high-resolution
+         )
 
 # the map display exceedance probabilities for suicide risk across South Korea, providing a spatial visualisation of regions where the risk surpasses a given threshold
 # the probability values range from <0.01 (very low risk) to 1.00 (very high risk), illustrating the heterogeneity of suicide risk across different administrative areas

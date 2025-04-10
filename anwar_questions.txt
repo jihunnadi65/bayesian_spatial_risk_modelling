@@ -1,0 +1,12 @@
+under-18, over-65, gender (male vs female)?
+- justify why
+
+variable choices
+- if established in literature best but you can hypothesise yourself
+
+graph connection decisions
+viable areal unit problem?
+
+over-disperion paramater and negative binomial model - specify an over-dispersion parameter
+structured + unstructured random effects (
+could opt for poisson base model
