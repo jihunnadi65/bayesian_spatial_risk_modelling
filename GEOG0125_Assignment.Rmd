@@ -363,7 +363,7 @@ tm_shape(sk_provinces_2022) +
 
 # save the current tmap as a PNG image in the "assets" folder
 tmap_save(tm = sk_suicide_map_2022,
-          filename = here::here("assets", "sk_suicide_map_2022.png"),
+          filename = here::here("assets", "suicide_map", "sk_suicide_map_2022.png"),
           width = 7,      # width in inches
           height = 9,    # height in inches
           dpi = 300,      # high-resolution
@@ -967,6 +967,11 @@ stan_spatial_dataset
 
 7.5. Compiling Stan code for Spatial ICAR Risk Modelling
 
+```{r}
+exp(-0.0014)
+```
+
+
 7.5.1. Printing of the Global Results
 
 ```{r}
@@ -1121,7 +1126,7 @@ RRPalette <- c(
   "#A50026"   # Deep red (> 1.50)
 )
 
-# Assign refined risk categories
+# assign refined risk categories
 model_df$relative_risk_cat <- NA
 model_df$relative_risk_cat[model_df$rr <= 0.75] <- -4
 model_df$relative_risk_cat[model_df$rr > 0.75 & model_df$rr <= 0.85] <- -3
@@ -1164,7 +1169,7 @@ rr_map
 
 # save the tmap as a PNG image in the "assets" folder
 tmap_save(tm = rr_map,
-          filename = here::here("assets", "relative_risk_map_2022.png"),
+          filename = here::here("assets", "relative_risk", "relative_risk_map_2022.png"),
           width = 7,      # width in inches
           height = 9,    # height in inches
           dpi = 300,      # high-resolution
@@ -1195,7 +1200,7 @@ sg_map
 
 # save the tmap as a PNG image in the "assets" folder
 tmap_save(tm = sg_map,
-          filename = here::here("assets", "significance_categories_map_2022.png"),
+          filename = here::here("assets", "significance_categories", "significance_categories_map_2022.png"),
           width = 7,      # width in inches
           height = 9,    # height in inches
           dpi = 300,      # high-resolution
@@ -1248,12 +1253,18 @@ View(model_df)
 ```
 
 ```{r}
+# define a lighter custom palette
+light_gnbu <- c(
+  "#f7fcf0", "#e0f3db", "#ccebc5", "#a8ddb5", "#7bccc4",
+  "#4eb3d3", "#2b8cbe", "#0868ac", "#084081"
+)
+
 # map of exceedance probabilities
-tm_shape(model_df) + 
+ep_map <- tm_shape(model_df) + 
     tm_polygons("prob_cat",
             style = "cat",
             title = "Probability",
-            palette = "GnBu",
+            palette = light_gnbu,
             labels = prob_cat_list,
             border.col = "black",
             border.alpha = 0.2) +
@@ -1268,9 +1279,12 @@ tm_layout(
     legend.frame = TRUE
   )
 
+# inspect
+ep_map
+
 # save the tmap as a PNG image in the "assets" folder
-tmap_save(tm = sg_map,
-          filename = here::here("assets", "significance_categories_map_2022.png"),
+tmap_save(tm = ep_map,
+          filename = here::here("assets", "exceedance_probabilities", "exceedance_probabilities_map_2022.png"),
           width = 7,      # width in inches
           height = 9,    # height in inches
           dpi = 300,      # high-resolution

@@ -1,4 +1,4 @@
-This is XeTeX, Version 3.141592653-2.6-0.999997 (MiKTeX 25.3) (preloaded format=xelatex 2025.4.1)  10 APR 2025 15:43
+This is XeTeX, Version 3.141592653-2.6-0.999997 (MiKTeX 25.3) (preloaded format=xelatex 2025.4.1)  12 APR 2025 18:48
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -300,27 +300,61 @@ Package caption Info: End \AtBeginDocument code.
 [1
 
 ]
-File: assets/suicide_map_2022_annotated.png Graphic file (type bmp)
-<assets/suicide_map_2022_annotated.png>
+File: assets/suicide_map/suicide_map_2022_annotated.png Graphic file (type bmp)
+
+<assets/suicide_map/suicide_map_2022_annotated.png>
 
 
 [2]
+Overfull \hbox (18.1679pt too wide) in paragraph at lines 82--83
+\TU/lmr/m/n/10.95 generally observed in rural and less urbanised areas, particu
+larly in part of Gangwon-do, Chungcheongnam-
+ []
+
+
 
 [3]
 
-[4] (bayesian_spatial_risk_modelling.aux)
+[4]
+Missing character: There is no ≈ in font [lmroman10-regular]:mapping=tex-text;!
+Missing character: There is no ≈ in font [lmroman10-regular]:mapping=tex-text;!
+File: assets/relative_risk/relative_risk_map_2022_annotated.png Graphic file (t
+ype bmp)
+<assets/relative_risk/relative_risk_map_2022_annotated.png>
+
+
+[5]
+
+[6]
+File: assets/significance_categories/significance_categories_map_2022_annotated
+.png Graphic file (type bmp)
+<assets/significance_categories/significance_categories_map_2022_annotated.png>
+
+File: assets/exceedance_probabilities/exceedance_probabilities_map_2022_annotat
+ed.png Graphic file (type bmp)
+<assets/exceedance_probabilities/exceedance_probabilities_map_2022_annotated.pn
+g>
+
+
+[7]
+Missing character: There is no ≥ in font [lmroman10-regular]:mapping=tex-text;!
+
+
+[8]
+
+[9] (bayesian_spatial_risk_modelling.aux)
  ***********
 LaTeX2e <2024-11-01> patch level 2
 L3 programming layer <2025-01-18>
  ***********
  ) 
 Here is how much of TeX's memory you used:
- 4993 strings out of 408639
- 80278 string characters out of 5744778
- 492121 words of memory out of 5000000
- 27989 multiletter control sequences out of 15000+600000
- 568325 words of font info for 81 fonts, out of 8000000 for 9000
+ 5041 strings out of 408639
+ 82839 string characters out of 5744778
+ 494209 words of memory out of 5000000
+ 28024 multiletter control sequences out of 15000+600000
+ 568357 words of font info for 85 fonts, out of 8000000 for 9000
  1348 hyphenation exceptions out of 8191
  57i,12n,65p,1391b,336s stack positions out of 10000i,1000n,20000p,200000b,200000s
 
-Output written on bayesian_spatial_risk_modelling.pdf (4 pages).
+Output written on bayesian_spatial_risk_modelling.pdf (9 pages).
