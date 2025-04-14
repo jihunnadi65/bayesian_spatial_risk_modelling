@@ -57,8 +57,10 @@ library(loo)
 # MASS gives us access to the glm.nb() function to estimate the dispersion parameter for use in Bayesian model
 library(MASS)
 
+# igraph is used for network analysis, which can help in representing spatial adjacency as graphs
 library(igraph)
 
+# RColorBrewer provides color palettes for enhancing visualizations, particularly useful in maps and plots
 library(RColorBrewer)
 ```
 
@@ -74,10 +76,12 @@ sk_municipalities_2022 <- st_read(here::here("SIG_20221119", "sig.shp"), options
   dplyr::select(SIG_CD, SIG_KOR_NM) %>% 
   # rename columns for better readability
   dplyr::rename(
-    code = SIG_CD,
-    name = SIG_KOR_NM
+    code = SIG_CD,         # region code
+    name = SIG_KOR_NM      # Korean name of the region
   )
 ```
+
+2.2. Loading South Korea Province-Level (City/Province) Shapefile
 
 ```{r}
 # load the South Korean provinces (Province, Special City, Metropolitan City) dataset based on 2022 boundaries (for supplementary mapping)
@@ -86,9 +90,10 @@ sk_provinces_2022 <- st_read(here::here("SD_20221119", "ctp_rvn.shp"), options =
   dplyr::select(CTPRVN_CD, CTP_ENG_NM) %>% 
   # rename columns for better readability
   dplyr::rename(
-    code = CTPRVN_CD,
-    name = CTP_ENG_NM
+    code = CTPRVN_CD,       # province code
+    name = CTP_ENG_NM       # English name of the province
   ) %>% 
+  # fix known typo in province name
   dplyr::mutate(
     name = dplyr::case_when(
       name == "Jellanam-do" ~ "Jeollanam-do",
@@ -96,26 +101,26 @@ sk_provinces_2022 <- st_read(here::here("SD_20221119", "ctp_rvn.shp"), options =
     )
   )
 
-# inspect
+# inspect spatial data visually
 qtm(sk_provinces_2022)
 ```
 
-
-2.2. Loading Municipalities Mapping Data
+2.3. Loading Municipalities Mapping Data
 
 ```{r}
 # read and process municipalities mapping
 # the locale setting ensures proper encoding (UTF-8) for Korean characters
 # the column types are explicitly set to treat "법정동코드" or code as a character to enable string operations
-municipalities_mapping <- read_csv(here::here("mapping", "administrative_area_codes.csv"),
-                                   locale = locale(encoding = "UTF-8"),
-                                   col_types = cols("법정동코드" = col_character())
-                                   ) %>% 
+municipalities_mapping <- read_csv(
+  here::here("mapping", "administrative_area_codes.csv"),
+  locale = locale(encoding = "UTF-8"),
+  col_types = cols("법정동코드" = col_character())
+) %>% 
   # translate columns to English
   dplyr::rename(
-    code = "법정동코드",
-    name = "법정동명",
-    status = "폐지여부"
+    code = "법정동코드",   # legal dong (administrative unit) code
+    name = "법정동명",     # name of the area
+    status = "폐지여부"   # status (whether abolished or existing)
   ) %>% 
   # keep only the rows where the status indicates the area still exists ("존재" means "existing")
   dplyr::filter(status == "존재") %>% 
@@ -130,22 +135,24 @@ municipalities_mapping <- read_csv(here::here("mapping", "administrative_area_co
   # - "전북특별자치도" (Jeonbuk Special Self-Governing Province) → "전라북도" (Jeollabuk-do)
   # - "강원특별자치도" (Gangwon Special Self-Governing Province) → "강원도" (Gangwon-do)
   # - "제주특별자치도" (Jeju Special Self-Governing Province) → "제주도" (Jeju-do)
-  dplyr::mutate(name = str_replace(name, "^전북특별자치도", "전라북도"),
-         name = str_replace(name, "^강원특별자치도", "강원도"),
-         name = str_replace(name, "^제주특별자치도", "제주도")
-         )
+  dplyr::mutate(
+    name = str_replace(name, "^전북특별자치도", "전라북도"),
+    name = str_replace(name, "^강원특별자치도", "강원도"),
+    name = str_replace(name, "^제주특별자치도", "제주도")
+  )
+
 ```
 
-2.3. Merging Municipalities Mapping Data With Shapefile
+2.4. Merging Municipalities Mapping Data With Shapefile
 
 ```{r}
 # merge municipality mapping data with the shapefile, based on the shared "code" column
 sk_municipalities_mapped <- sk_municipalities_2022 %>% 
   # left join to merge municipality mapping data onto the shapefile data
-  dplyr::left_join(municipalities_mapping, by="code") %>% 
+  dplyr::left_join(municipalities_mapping, by = "code") %>% 
   # handle missing municipality names for regions whose names have changed since 2022
   # some codes do not have a direct match in 'municipalities_mapping' (as they had been assigned new codes when their names changed to Special Self-Governing Provinces)
-  # so we assign names based on their original names
+  # so we assign names based on their original names in the shapefile
   dplyr::mutate(name.y = case_when(
     # if the code starts with "42" (Gangwon Province) and the name is missing, use "강원도" + existing name in shapefile
     str_starts(code, "42") & is.na(name.y) ~ paste("강원도", name.x),
@@ -153,7 +160,7 @@ sk_municipalities_mapped <- sk_municipalities_2022 %>%
     str_starts(code, "45") & is.na(name.y) ~ paste("전라북도", name.x),
     # if the code starts with "47" (Gyeongsangbuk-do) and the name is missing, use "경상북도" + existing name in shapefile
     str_starts(code, "47") & is.na(name.y) ~ paste("경상북도", name.x),
-    # otherwise, keep the assisgned municipality names from the join
+    # otherwise, keep the assigned municipality names from the join
     TRUE ~ name.y
   )) %>% 
   # select only relevant columns
@@ -162,12 +169,13 @@ sk_municipalities_mapped <- sk_municipalities_2022 %>%
   dplyr::rename(name = name.y)
 ```
 
-2.4. Aggregating Districts within Ordinary Cities to Match Target Variable Spatial Granularity
+2.5. Aggregating Districts within Ordinary Cities to Match Target Variable Spatial Granularity
 
 ```{r}
 # separate the dataset into two parts, with rows 76 onward containing ordinary cities and their districts
 # the first 75 rows will remain unchanged, as the target variable will have the data for districts within special & metropolitan cities
 sk_municipalities_1 <- sk_municipalities_mapped[1:75, ]
+
 # certain rows from row 76 onward will be aggregated, as the target variable will not have the data for districts within ordinary cities
 sk_municipalities_2 <- sk_municipalities_mapped[76:nrow(sk_municipalities_mapped), ]
 
@@ -187,47 +195,48 @@ sk_municipalities_2 <- sk_municipalities_2 %>%
     str_detect(name, "전주시") ~ "전라북도 전주시",
     str_detect(name, "포항시") ~ "경상북도 포항시",
     str_detect(name, "창원시") ~ "경상남도 창원시",
-    TRUE ~ name # keep other names unchanged
+    TRUE ~ name  # keep other names unchanged
   ))
 
 # merge districts into their corresponding parent cities
 # group by the newly assigned 'city' column and use st_union() to combine the geometries into a single shape per city
 sk_municipalities_2 <- sk_municipalities_2 %>% 
   dplyr::group_by(city) %>% 
-  dplyr::summarise(geometry = st_union(geometry, .groups = "drop"))
+  dplyr::summarise(geometry = st_union(geometry), .groups = "drop")
 
 # merge back aggregated data with unchanged municipalities
 sk_municipalities_merged <- dplyr::bind_rows(sk_municipalities_1, sk_municipalities_2) %>% 
-  # coalesce the newly created 'city' column into the orignal 'name'
+  # coalesce the newly created 'city' column into the original 'name'
   dplyr::mutate(name = coalesce(name, city)) %>% 
   # keep only the 'name' column. We will primarily be working with standardised municipality names for subsequent joins
   dplyr::select(name)
 
-# clean up variables unnecessary for down-stream analysis
+# clean up variables unnecessary for downstream analysis
 remove(sk_municipalities_1)
 remove(sk_municipalities_2)
 ```
 
-2.5. Re-mapping Municipalities to Retrieve Standardised Codes
+2.6. Re-mapping Municipalities to Retrieve Standardised Codes
 
 ```{r}
 # join back with 'municipalities_mapping' by 'name' to retrieve official codes
 sk_municipalities_clean <- sk_municipalities_merged %>%
-  # we left join to re-assign proper code names based on the municipality name
-  dplyr::left_join(municipalities_mapping, by = "name")%>%
+  # perform a left join to re-assign official administrative codes based on municipality name
+  dplyr::left_join(municipalities_mapping, by = "name") %>%
   # keep only the relevant columns
   dplyr::select(code, name) %>%
-  # manually address discrepancy in '군위군' (Gunwi County) - the country was officially integrated into Daegu Metropolitan City only in 2023
+  # manually address discrepancy in '군위군' (Gunwi County) — it was officially incorporated into Daegu Metropolitan City in 2023
   dplyr::mutate(code = case_when(
-    # we manually assign the code "47720" to Gunwi County - its code as of 2022, prior to administrative integration
+    # assign the pre-2023 code "47720" to Gunwi County for 2022-based analysis
     name == "경상북도 군위군" ~ "47720",
     # keep other codes unchanged
     TRUE ~ code
-  )) %>% 
-  # convert 'code' column to integer type for correct sorting
-  dplyr::mutate(code = as.integer(code)) %>% 
-  # sort by code in an ascending order
+  )) %>%
+  # convert 'code' column to integer type for proper sorting and consistency
+  dplyr::mutate(code = as.integer(code)) %>%
+  # sort data by code in ascending order
   dplyr::arrange(code)
+
 ```
 
 3. Loading and Cleaning Suicide Rate Data by Municipality
@@ -238,56 +247,57 @@ sk_municipalities_clean <- sk_municipalities_merged %>%
 suicide_rate <- read_excel(here::here("variables", "target variable", "suicide_rate_per_100000_people_by_municipality.xlsx"))
 
 # preprocess suicide rate dataset
-suicide_rate <-  suicide_rate %>%
+suicide_rate <- suicide_rate %>%
   # translate column names to English
   dplyr::rename(
-     municipality = "시군구별",
-     gender = "성별"
-  ) %>% 
+    municipality = "시군구별",
+    gender = "성별"
+  ) %>%
   # keep only rows with overall suicide rate (excluding gender-specific data)
   dplyr::filter(gender == "계") %>%
   # remove rows where 2022 suicide rate is missing ("-")
-  dplyr::filter(`2022` != "-") %>% 
+  dplyr::filter(`2022` != "-") %>%
   # retain only relevant columns
-  dplyr::select("municipality", "2022")
+  dplyr::select(municipality, `2022`)
 
 # manually reconcile municipality name discrepancies
 suicide_rate_clean <- suicide_rate %>%
   dplyr::mutate(municipality = case_when(
     # account for province or city names that have changed since 2022
-    row_number() == 134 ~ "강원도", # province name in 2022
-    row_number() == 187 ~ "전라북도", # province name in 2022
-    row_number() == 257 ~ "창원시", # city name in 2022
+    row_number() == 134 ~ "강원도",       # province name in 2022
+    row_number() == 187 ~ "전라북도",     # province name in 2022
+    row_number() == 257 ~ "창원시",       # city name in 2022
     TRUE ~ municipality
   )) %>%
   # identify administrative unit types (Province, Special City, City, District, County)
   mutate(
-    is_province = str_detect(municipality, "도$"), # provinces (도)
-    is_special_city = str_detect(municipality, "(특별시|광역시|특별자치시)$"), # special / metropolitan cities (특별시 / 광역시)
-    is_city = !is_special_city & str_detect(municipality, "시$"), # ordinary cities (시)
-    is_district = str_detect(municipality, "구$"), # districts within cities (구)
-    is_county = str_detect(municipality, "군$") # counties within provinces (군)
-  ) %>% 
-  # assign province, special city, city, district, and county based on classification
+    is_province = str_detect(municipality, "도$"),                                 # provinces (도)
+    is_special_city = str_detect(municipality, "(특별시|광역시|특별자치시)$"),     # special/metropolitan cities
+    is_city = !is_special_city & str_detect(municipality, "시$"),                 # ordinary cities
+    is_district = str_detect(municipality, "구$"),                                # districts
+    is_county = str_detect(municipality, "군$")                                   # counties
+  ) %>%
+  # assign classifications to separate columns
   mutate(
     province = ifelse(is_province, municipality, NA),
     special_city = ifelse(is_special_city, municipality, NA),
     city = ifelse(is_city, str_trim(municipality), NA),
     district = ifelse(is_district, str_trim(municipality), NA),
-    county = ifelse(is_county, str_trim(municipality), NA)) %>% 
+    county = ifelse(is_county, str_trim(municipality), NA)
+  ) %>%
   # fill province names downward
-  fill(province, .direction = "down") %>% 
-  # fill special city names downward and filter for correct results
-  fill(special_city, .direction = "down") %>% 
-  mutate(special_city = ifelse(row_number() >= 85, NA, special_city)) %>% 
-  # fill city names downward and filter for correct results
-  fill(city, .direction = "down") %>% 
-  mutate(city = ifelse(is_province | is_county, NA, city)) %>% 
-  # concatenate province, special city, city, district, and countries according to the below logic
+  fill(province, .direction = "down") %>%
+  # fill special city names downward and handle row-specific filtering
+  fill(special_city, .direction = "down") %>%
+  mutate(special_city = ifelse(row_number() >= 85, NA, special_city)) %>%
+  # fill city names downward and handle exclusions
+  fill(city, .direction = "down") %>%
+  mutate(city = ifelse(is_province | is_county, NA, city)) %>%
+  # concatenate columns based on administrative structure
   dplyr::mutate(municipality_clean = case_when(
-    # special / metropolitan cities with districts
+    # special/metropolitan cities with districts
     is.na(province) & !is.na(special_city) & is.na(city) & !is.na(district) & is.na(county) ~ paste(special_city, district),
-    # special / metropolitan cities with counties
+    # special/metropolitan cities with counties
     is.na(province) & !is.na(special_city) & is.na(city) & is.na(district) & !is.na(county) ~ paste(special_city, county),
     # Sejong Special Self-Governing City (unique case)
     is.na(province) & !is.na(special_city) & !is.na(city) & is.na(district) & is.na(county) ~ "세종특별자치시",
@@ -298,16 +308,16 @@ suicide_rate_clean <- suicide_rate %>%
     # province-level counties
     !is.na(province) & is.na(special_city) & is.na(city) & is.na(district) & !is.na(county) ~ paste(province, county),
     TRUE ~ NA
-  )
-  )%>% 
-  # filter out NA values in municipality_clean
-  dplyr::filter(!is.na(municipality_clean)) %>% 
-  # rename column '2022' to 'suicide_rate'
-  dplyr::rename(suicide_rate = `2022`) %>% 
+  )) %>%
+  # remove rows with unresolved names
+  dplyr::filter(!is.na(municipality_clean)) %>%
+  # rename the 2022 column to 'suicide_rate'
+  dplyr::rename(suicide_rate = `2022`) %>%
   # retain only final relevant columns
   dplyr::select(municipality_clean, suicide_rate) %>%
-  # convert suicide rate to numeric data type
+  # convert suicide rate to numeric
   dplyr::mutate(suicide_rate = as.numeric(suicide_rate))
+
 ```
 
 3.1. Merging Suicide Rate Data with Municipality Shapefile
@@ -315,8 +325,8 @@ suicide_rate_clean <- suicide_rate %>%
 ```{r}
 # join municipality shapefile with suicide rate data
 suicide_rate_municipality <- sk_municipalities_clean %>% 
-  # we perform a left join to retain only rows that align with shapefile spatial level
-  dplyr::left_join(., suicide_rate_clean, by=c("name" = "municipality_clean")) %>% 
+  # perform a left join to merge suicide rate data at the spatial level of the shapefile
+  dplyr::left_join(suicide_rate_clean, by = c("name" = "municipality_clean")) %>% 
   # retain only relevant columns
   dplyr::select(code, name, suicide_rate)
 ```
@@ -326,542 +336,510 @@ suicide_rate_municipality <- sk_municipalities_clean %>%
 ```{r}
 # fix invalid geometries in the shapefile
 suicide_rate_municipality <- suicide_rate_municipality %>% 
-  st_make_valid() # fixes self-intersections and other issues
+  st_make_valid()  # fixes self-intersections and other common geometry issues
 
 # check for remaining invalid geometries
-sum(!st_is_valid(suicide_rate_municipality)) # should return 0 if all are valid
+sum(!st_is_valid(suicide_rate_municipality))  # should return 0 if all geometries are valid
 ```
 
 ```{r}
-# set tmap to interactive mode
+# set tmap to plot mode (static map)
 tmap_mode("plot")
 
-palette = c("#fef0f0", "#fcd3d3", "#f8a8a8", "#f07575", "#d94747")
-palette_2 = c("#fdf6f6", "#f9d9db", "#f6a9b2", "#ec646b", "#d53039")
+# define color palettes
+palette <- c("#fef0f0", "#fcd3d3", "#f8a8a8", "#f07575", "#d94747")
+palette_2 <- c("#fdf6f6", "#f9d9db", "#f6a9b2", "#ec646b", "#d53039")
 
 # generate the suicide rate thematic map
 sk_suicide_map_2022 <- tm_shape(suicide_rate_municipality) +
   tm_polygons("suicide_rate",
               title = "Suicides per\n100,000 People",
               palette = palette_2,
-              border.col= "black",
-              border.alpha= 0.2,
+              border.col = "black",
+              border.alpha = 0.2,
               style = "quantile") +
   tm_scale_bar(width = 0.1, text.size = 0.4, position = c("left", "bottom")) +
   tm_compass(size = 1, type = "arrow", position = c("right", "top")) +
   tm_layout(
-            # main.title = "Suicide Rates Across South Korea (2022)",
-            # main.title.position = "center",
-            # main.title.size = 1.2,
-            legend.frame = TRUE,
-            legend.position = c("right", "bottom"),
-            legend.title.size = 0.9,
-            legend.text.size = 0.7,
-            frame = TRUE) +
-tm_shape(sk_provinces_2022) +
-  tm_borders(lwd = 1, col = "black") # thicker border
+    # main.title = "Suicide Rates Across South Korea (2022)",
+    # main.title.position = "center",
+    # main.title.size = 1.2,
+    legend.frame = TRUE,
+    legend.position = c("right", "bottom"),
+    legend.title.size = 0.9,
+    legend.text.size = 0.7,
+    frame = TRUE
+  ) +
+  tm_shape(sk_provinces_2022) +
+  tm_borders(lwd = 1, col = "black")  # thicker border
 
 # save the current tmap as a PNG image in the "assets" folder
-tmap_save(tm = sk_suicide_map_2022,
-          filename = here::here("assets", "suicide_map", "sk_suicide_map_2022.png"),
-          width = 7,      # width in inches
-          height = 9,    # height in inches
-          dpi = 300,      # high-resolution
-         )
-```
+tmap_save(
+  tm = sk_suicide_map_2022,
+  filename = here::here("assets", "suicide_map", "sk_suicide_map_2022.png"),
+  width = 7,       # width in inches
+  height = 9,      # height in inches
+  dpi = 300        # high-resolution
+)
 
-```{r}
+# inspect
 sk_suicide_map_2022
 ```
 
-5. Loading Predictor Variables
+4. Loading Predictor Variables
 
-5.1. Single Person Household Ratio
+4.1. Single Person Household Ratio
 
 ```{r}
 # load single-person household ratio data
-# reads data from excel file containing the percentage of single-person households by municipality in 2022
-single_person_household <- read_excel(here::here("variables", "predictor variable", "single_person_household_ratio_by_municipality_2022.xlsx"), col_names=TRUE) %>% 
+# reads data from Excel file containing the percentage of single-person households by municipality in 2022
+single_person_household <- read_excel(
+  here::here("variables", "predictor variable", "single_person_household_ratio_by_municipality_2022.xlsx"),
+  col_names = TRUE
+) %>% 
   # select only relevant columns
   dplyr::select("행정구역별", "1인가구비율<br>(A÷B×100) (%)") %>% 
   # translate columns to English
   dplyr::rename(
-     municipality = "행정구역별",
-     single_person_household_ratio = "1인가구비율<br>(A÷B×100) (%)"
+    municipality = "행정구역별",
+    single_person_household_ratio = "1인가구비율<br>(A÷B×100) (%)"
   )
 
-# clean and standardise municipality names
+# clean and standardize municipality names
 single_person_household_clean <- single_person_household %>% 
   # account for province or city names that have changed since 2022
   dplyr::mutate(municipality = case_when(
-    row_number() == 116 ~ "강원도", # province name in 2022
-    row_number() == 163 ~ "전라북도", # province name in 2022
-    row_number() == 244 ~ "제주도", # province name in 2022
-    TRUE ~ municipality)) %>% 
-  # identify administrative unit types (Province, Special City, City, District, County)
+    row_number() == 116 ~ "강원도",       # province name in 2022
+    row_number() == 163 ~ "전라북도",     # province name in 2022
+    row_number() == 244 ~ "제주도",       # province name in 2022
+    TRUE ~ municipality
+  )) %>% 
+  # identify administrative unit types
   mutate(
-    is_province = str_detect(municipality, "도$"), # provinces (도)
-    is_special_city = str_detect(municipality, "(특별시|광역시|특별자치시)$"), # special cities / metropolitan cities (특별시 / 광역시)
-    is_city = !is_special_city & str_detect(municipality, "시$"), # ordinary cities (시)
-    is_district = str_detect(municipality, "구$"), # districts within cities (구)
-    is_county = str_detect(municipality, "군$") # counties within provinces (군)
+    is_province = str_detect(municipality, "도$"),                                 # provinces (도)
+    is_special_city = str_detect(municipality, "(특별시|광역시|특별자치시)$"),     # special/metropolitan cities
+    is_city = !is_special_city & str_detect(municipality, "시$"),                 # ordinary cities
+    is_district = str_detect(municipality, "구$"),                                # districts
+    is_county = str_detect(municipality, "군$")                                   # counties
   ) %>% 
-  # assign province, special city, city, district, and county based on classification
+  # assign components to new columns
   mutate(
     province = ifelse(is_province, municipality, NA),
     special_city = ifelse(is_special_city, municipality, NA),
     city = ifelse(is_city, str_trim(municipality), NA),
     district = ifelse(is_district, str_trim(municipality), NA),
-    county = ifelse(is_county, str_trim(municipality), NA)) %>% 
-  # fill province names downward
+    county = ifelse(is_county, str_trim(municipality), NA)
+  ) %>% 
+  # fill higher-level administrative names downward
   fill(province, .direction = "down") %>% 
-  # fill special city names downward and filter for correct results
   fill(special_city, .direction = "down") %>% 
   mutate(special_city = ifelse(row_number() >= 85, NA, special_city)) %>% 
-  # fill city names downward and filter for correct results
   fill(city, .direction = "down") %>% 
   mutate(city = ifelse(is_province | is_county, NA, city)) %>% 
-  # concatenate province, special city, city, district, and countries according to the below logic
+  # construct standardized municipality names
   dplyr::mutate(municipality_clean = case_when(
-    # special / metropolitan cities with districts
+    # special/metropolitan cities with districts
     is.na(province) & !is.na(special_city) & is.na(city) & !is.na(district) & is.na(county) ~ paste(special_city, district),
-    # special / metropolitan cities with counties
+    # special/metropolitan cities with counties
     is.na(province) & !is.na(special_city) & is.na(city) & is.na(district) & !is.na(county) ~ paste(special_city, county),
     # Sejong Special Self-Governing City (unique case)
     is.na(province) & special_city == "세종특별자치시" & is.na(city) & is.na(district) & is.na(county) ~ "세종특별자치시",
-    # province-level ordinary cities (ordinary city-level districts were not surveyed here, so there is no distinction between the two)
+    # province-level ordinary cities (no district distinction in this dataset)
     !is.na(province) & is.na(special_city) & !is.na(city) & is.na(district) & is.na(county) ~ paste(province, city),
     # province-level counties
     !is.na(province) & is.na(special_city) & is.na(city) & is.na(district) & !is.na(county) ~ paste(province, county),
     TRUE ~ NA
-  ))%>%
-  # filter out NA values in municipality_clean
-  dplyr::filter(!is.na(municipality_clean)) %>%
-  # retain only final relevant columns
+  )) %>% 
+  # filter out unresolved names
+  dplyr::filter(!is.na(municipality_clean)) %>% 
+  # retain only final columns
   dplyr::select(municipality_clean, single_person_household_ratio) %>% 
-  # convert single person household ratio to numeric data type
+  # convert ratio to numeric type
   dplyr::mutate(single_person_household_ratio = as.numeric(single_person_household_ratio))
+
 ```
 
-5.2. Stress Awareness Rate
+4.2. Stress Awareness Rate
 
 ```{r}
 # load stress awareness rate data
-# reads the data from excel file containing stress awareness rates by municipality in 2022
-stress_awareness_rate <- read_excel(here::here("variables", "predictor variable", "stress_awareness_rate_by_municipality_2022_2024.xlsx"), col_names=TRUE) %>% 
+# reads data from Excel file containing stress awareness rates by municipality in 2022
+stress_awareness_rate <- read_excel(
+  here::here("variables", "predictor variable", "stress_awareness_rate_by_municipality_2022_2024.xlsx"),
+  col_names = TRUE
+) %>% 
   # select only relevant columns
   dplyr::select("행정구역별", "2022") %>% 
   # translate columns to English
   dplyr::rename(
-     municipality = "행정구역별",
-     stress_awareness_rate = "2022"
+    municipality = "행정구역별",
+    stress_awareness_rate = "2022"
   )
 
-# clean and standardise municipality names
+# clean and standardize municipality names
 stress_awareness_rate_clean <- stress_awareness_rate %>% 
-  # manually reconcile for municipality names that are inconsistent or changed since 2022
+  # manually reconcile municipality names that changed since 2022
   dplyr::mutate(municipality = case_when(
-    row_number() == 115 ~ "강원도", # province name in 2022
-    row_number() == 137 ~ "청주시", # city name in 2022
-    row_number() == 162 ~ "전라북도", # province name in 2022
-    row_number() == 225 ~ "창원시", # city name in 2022
-    row_number() == 243 ~ "제주도", # province name in 2022
-    TRUE ~ municipality)) %>% 
-    # while Jeju province consists of 2 administrative districts (Seogwipo-si and Jeju-si), it has been surveyed as a single district in the dataset
-    # this step breaks Jeju down into 2 administrative units and assigns the value for Jeju province to each
-    # this is to be consistent with our shapefile and suicide rate data
+    row_number() == 115 ~ "강원도",     # province name in 2022
+    row_number() == 137 ~ "청주시",     # city name in 2022
+    row_number() == 162 ~ "전라북도",   # province name in 2022
+    row_number() == 225 ~ "창원시",     # city name in 2022
+    row_number() == 243 ~ "제주도",     # province name in 2022
+    TRUE ~ municipality
+  )) %>% 
+  # duplicate Jeju row to represent its two administrative cities
   bind_rows(
     stress_awareness_rate %>%
-    filter(str_starts(municipality, "제주")) %>%
-    slice(rep(1:n(), each = 2))) %>% # duplicate Jeju row
-  dplyr::mutate(municipality = case_when(
-    row_number() == 244 ~ "제주시", # Jeju city
-    row_number() == 245 ~ "서귀포시", # Seogwipo city
-    TRUE ~ municipality)) %>% 
-  # identify Administrative Unit Types (Province, Special City, City, District, County)
-  mutate(
-    is_province = str_detect(municipality, "도$"), # provinces (도)
-    is_special_city = str_detect(municipality, "(특별시|광역시|특별자치시)$"), # special / metropolitan cities (특별시 / 광역시)
-    is_city = !is_special_city & str_detect(municipality, "시$"), # ordinary cities (시)
-    is_district = str_detect(municipality, "구$"), # districts within cities (구)
-    is_county = str_detect(municipality, "군$") # counties within provinces (군)
+      filter(str_starts(municipality, "제주")) %>%
+      slice(rep(1:n(), each = 2))
   ) %>% 
-  # assign province, special city, city, district, and county based on classification
+  dplyr::mutate(municipality = case_when(
+    row_number() == 244 ~ "제주시",
+    row_number() == 245 ~ "서귀포시",
+    TRUE ~ municipality
+  )) %>% 
+  # identify administrative unit types
+  mutate(
+    is_province = str_detect(municipality, "도$"),                               # provinces
+    is_special_city = str_detect(municipality, "(특별시|광역시|특별자치시)$"),   # special/metropolitan cities
+    is_city = !is_special_city & str_detect(municipality, "시$"),               # ordinary cities
+    is_district = str_detect(municipality, "구$"),                              # districts
+    is_county = str_detect(municipality, "군$")                                 # counties
+  ) %>% 
+  # assign region levels based on unit type
   mutate(
     province = ifelse(is_province, municipality, NA),
     special_city = ifelse(is_special_city, municipality, NA),
     city = ifelse(is_city, str_trim(municipality), NA),
     district = ifelse(is_district, str_trim(municipality), NA),
-    county = ifelse(is_county, str_trim(municipality), NA)) %>% 
-  # fill province names downward
+    county = ifelse(is_county, str_trim(municipality), NA)
+  ) %>% 
+  # fill administrative hierarchies downward
   fill(province, .direction = "down") %>% 
-  # fill special city names downward and filter for correct results
   fill(special_city, .direction = "down") %>% 
   mutate(special_city = ifelse(row_number() >= 83, NA, special_city)) %>% 
-  # fill city names downward and filter for correct results
   fill(city, .direction = "down") %>% 
   mutate(city = ifelse(is_province | is_county, NA, city)) %>% 
-  # concatenate province, special city, city, district, and countries according to the below logic
+  # create standardized municipality name for joining
   dplyr::mutate(municipality_clean = case_when(
-    # special / metropolitan cities with districts
+    # special/metropolitan cities with districts
     is.na(province) & !is.na(special_city) & is.na(city) & !is.na(district) & is.na(county) ~ paste(special_city, district),
-    # special / metropolitan cities with counties
+    # special/metropolitan cities with counties
     is.na(province) & !is.na(special_city) & is.na(city) & is.na(district) & !is.na(county) ~ paste(special_city, county),
-    # Sejong Special Self-Governing City (unique case)    
+    # Sejong Special Self-Governing City (unique case)
     is.na(province) & special_city == "세종특별자치시" & is.na(city) & is.na(district) & is.na(county) ~ "세종특별자치시",
-    # province-level ordinary cities (ordinary city-level districts were not surveyed here, so there is no distinction between the two)
+    # province-level ordinary cities
     !is.na(province) & is.na(special_city) & !is.na(city) & is.na(district) & is.na(county) ~ paste(province, city),
-    # province-level counties    
+    # province-level counties
     !is.na(province) & is.na(special_city) & is.na(city) & is.na(district) & !is.na(county) ~ paste(province, county),
     TRUE ~ NA
-  ))%>%
-  # filter out NA values in municipality_clean
-  dplyr::filter(!is.na(municipality_clean)) %>%
-  # retain only final relevant columns
+  )) %>% 
+  # remove unresolved rows
+  dplyr::filter(!is.na(municipality_clean)) %>% 
+  # retain only cleaned columns
   dplyr::select(municipality_clean, stress_awareness_rate) %>% 
-  # convert single person household ratio to numeric data type
+  # convert stress awareness rate to numeric
   dplyr::mutate(stress_awareness_rate = as.numeric(stress_awareness_rate))
 ```
 
-5.3. Unemployment Rate
+4.3. Unemployment Rate
 
 ```{r}
 # load unemployment rate data
-# reads the data from excel file containing unemployment rates by municipality in 2022
-unemployment_rate <- read_excel(here::here("variables", "predictor variable", "unemployment_rate_by_municipality_2022.xlsx"), col_names=TRUE) %>% 
+# reads data from Excel file containing unemployment rates by municipality in 2022
+unemployment_rate <- read_excel(
+  here::here("variables", "predictor variable", "unemployment_rate_by_municipality_2022.xlsx"),
+  col_names = TRUE
+) %>% 
   # select only relevant columns
   dplyr::select("행정구역별", "2022.2/2") %>% 
   # translate columns to English
   dplyr::rename(
-     municipality = "행정구역별",
-     unemployment_rate = "2022.2/2"
+    municipality = "행정구역별",
+    unemployment_rate = "2022.2/2"
   )
 
-# clean and standardise municipality names
+# clean and standardize municipality names
 unemployment_rate_clean <- unemployment_rate %>%
-  # fix inconsistencies in city/province naming conventions
-  dplyr::mutate(municipality = str_replace(municipality, "^서울", "서울특별시")) %>% # special city
-  dplyr::mutate(municipality = str_replace(municipality, "^(부산|대구|인천|광주|대전|울산)", "\\1광역시")) %>%  # metropolitan cities
+  # fix naming conventions for special/metropolitan cities
+  dplyr::mutate(municipality = str_replace(municipality, "^서울", "서울특별시")) %>%
+  dplyr::mutate(municipality = str_replace(municipality, "^(부산|대구|인천|광주|대전|울산)", "\\1광역시")) %>%
+  # assign province names to their respective municipalities
   mutate(municipality = case_when(
-    # assign "경기도" to its municipalities
-    str_detect(municipality, "^(수원시|성남시|의정부시|안양시|부천시|광명시|평택시|동두천시|안산시|고양시|과천시|구리시|남양주시|오산시|시흥시|군포시|의왕시|하남시|용인시|파주시|이천시|안성시|김포시|화성시|양주시|포천시|여주시|연천군|가평군|양평군)$") ~ 
-      str_c("경기도 ", municipality),
-    # assign "강원도" to its municipalities
-    str_detect(municipality, "^(춘천시|원주시|강릉시|동해시|태백시|속초시|삼척시|홍천군|횡성군|영월군|평창군|정선군|철원군|화천군|양구군|인제군|고성군|양양군)$") ~ 
-      str_c("강원도 ", municipality),
-    # assign "충청북도" to its municipalities
-    str_detect(municipality, "^(청주시|충주시|제천시|보은군|옥천군|영동군|진천군|괴산군|음성군|단양군|증평군)$") ~ 
-      str_c("충청북도 ", municipality),
-    # assign "충청남도" to its municipalities
-    str_detect(municipality, "^(천안시|공주시|보령시|아산시|서산시|논산시|계룡시|당진시|금산군|부여군|서천군|청양군|홍성군|예산군|태안군)$") ~ 
-      str_c("충청남도 ", municipality),
-    # assign "전라북도" to its municipalities
-    str_detect(municipality, "^(전주시|군산시|익산시|정읍시|남원시|김제시|완주군|진안군|무주군|장수군|임실군|순창군|고창군|부안군)$") ~ 
-      str_c("전라북도 ", municipality),
-    # assign "전라남도" to its municipalities
-    str_detect(municipality, "^(목포시|여수시|순천시|나주시|광양시|담양군|곡성군|구례군|고흥군|보성군|화순군|장흥군|강진군|해남군|영암군|무안군|함평군|영광군|장성군|완도군|진도군|신안군)$") ~ 
-      str_c("전라남도 ", municipality),
-    # assign "경상북도" to its municipalities
-    str_detect(municipality, "^(포항시|경주시|김천시|안동시|구미시|영주시|영천시|상주시|문경시|경산시|의성군|청송군|영양군|영덕군|청도군|고령군|성주군|칠곡군|예천군|봉화군|울진군|울릉군)$") ~ 
-      str_c("경상북도 ", municipality),
-    # assign "경상남도" to its municipalities
-    str_detect(municipality, "^(진주시|통영시|사천시|김해시|밀양시|거제시|양산시|창원시|의령군|함안군|창녕군|고성군|남해군|하동군|산청군|함양군|거창군|합천군)$") ~ 
-      str_c("경상남도 ", municipality),
-    # assign "제주도" to its municipalities
-    str_detect(municipality, "^(제주시|서귀포시)$") ~ 
-      str_c("제주도 ", municipality),
-    TRUE ~ municipality # there shouldn't be any exceptions
-  )) %>% 
-  # manually handle name discrepancies not covered above & errors introduced by the above due to duplicate municipality names in different provinces
-    dplyr::mutate(municipality = 
-                    ifelse(str_detect(municipality, "대구광역시 군위군"),
-      "경상북도 군위군", municipality)) %>% 
-    dplyr::mutate(municipality = 
-                    ifelse(row_number() == 220 & str_detect(municipality, "강원도 고성군"), "경상남도 고성군", municipality)) %>% 
-    dplyr::mutate(municipality = 
-                    ifelse(row_number() == 100 & str_detect(municipality, "광주광역시시"), "경기도 광주시", municipality)) %>% 
-  dplyr::rename(municipality_clean = municipality) %>% 
+    str_detect(municipality, "^(수원시|성남시|의정부시|안양시|부천시|광명시|평택시|동두천시|안산시|고양시|과천시|구리시|남양주시|오산시|시흥시|군포시|의왕시|하남시|용인시|파주시|이천시|안성시|김포시|화성시|양주시|포천시|여주시|연천군|가평군|양평군)$") ~ str_c("경기도 ", municipality),
+    str_detect(municipality, "^(춘천시|원주시|강릉시|동해시|태백시|속초시|삼척시|홍천군|횡성군|영월군|평창군|정선군|철원군|화천군|양구군|인제군|고성군|양양군)$") ~ str_c("강원도 ", municipality),
+    str_detect(municipality, "^(청주시|충주시|제천시|보은군|옥천군|영동군|진천군|괴산군|음성군|단양군|증평군)$") ~ str_c("충청북도 ", municipality),
+    str_detect(municipality, "^(천안시|공주시|보령시|아산시|서산시|논산시|계룡시|당진시|금산군|부여군|서천군|청양군|홍성군|예산군|태안군)$") ~ str_c("충청남도 ", municipality),
+    str_detect(municipality, "^(전주시|군산시|익산시|정읍시|남원시|김제시|완주군|진안군|무주군|장수군|임실군|순창군|고창군|부안군)$") ~ str_c("전라북도 ", municipality),
+    str_detect(municipality, "^(목포시|여수시|순천시|나주시|광양시|담양군|곡성군|구례군|고흥군|보성군|화순군|장흥군|강진군|해남군|영암군|무안군|함평군|영광군|장성군|완도군|진도군|신안군)$") ~ str_c("전라남도 ", municipality),
+    str_detect(municipality, "^(포항시|경주시|김천시|안동시|구미시|영주시|영천시|상주시|문경시|경산시|의성군|청송군|영양군|영덕군|청도군|고령군|성주군|칠곡군|예천군|봉화군|울진군|울릉군)$") ~ str_c("경상북도 ", municipality),
+    str_detect(municipality, "^(진주시|통영시|사천시|김해시|밀양시|거제시|양산시|창원시|의령군|함안군|창녕군|고성군|남해군|하동군|산청군|함양군|거창군|합천군)$") ~ str_c("경상남도 ", municipality),
+    str_detect(municipality, "^(제주시|서귀포시)$") ~ str_c("제주도 ", municipality),
+    TRUE ~ municipality
+  )) %>%
+  # manually fix anomalies or incorrect auto-assignments
+  dplyr::mutate(municipality = ifelse(str_detect(municipality, "대구광역시 군위군"), "경상북도 군위군", municipality)) %>%
+  dplyr::mutate(municipality = ifelse(row_number() == 220 & str_detect(municipality, "강원도 고성군"), "경상남도 고성군", municipality)) %>%
+  dplyr::mutate(municipality = ifelse(row_number() == 100 & str_detect(municipality, "광주광역시"), "경기도 광주시", municipality)) %>%
+  # finalize
+  dplyr::rename(municipality_clean = municipality) %>%
   dplyr::mutate(unemployment_rate = as.numeric(unemployment_rate))
 
 # handle missing row for Sejong Special Self-Governing City
-# since Sejong's unemployment rate is missing, we impute it using the the average unemployment rate of neighbouring provinces (충청북도, 충청남도, 대전)
+# since Sejong's unemployment rate is missing, we impute it using the average from nearby regions (충청북도, 충청남도, 대전광역시)
 chungcheong_avg_unemployment <- unemployment_rate_clean %>%
   filter(str_detect(municipality_clean, "충청북도|충청남도|대전광역시")) %>%
   summarise(mean_unemployment = mean(unemployment_rate, na.rm = TRUE)) %>%
   pull(mean_unemployment)
 
-# if Sejong is missing, impute it with the calculated average
-if(!any(unemployment_rate_clean$municipality_clean == "세종특별자치시")) {
-sejong_unemployment <- tibble(
-  municipality_clean = "세종특별자치시",
-  unemployment_rate = round(chungcheong_avg_unemployment, 1)
-)
-# add Sejong to the dataset
-unemployment_rate_clean <- unemployment_rate_clean %>%
-  bind_rows(sejong_unemployment)
+# add Sejong if missing
+if (!any(unemployment_rate_clean$municipality_clean == "세종특별자치시")) {
+  sejong_unemployment <- tibble(
+    municipality_clean = "세종특별자치시",
+    unemployment_rate = round(chungcheong_avg_unemployment, 1)
+  )
+  
+  unemployment_rate_clean <- unemployment_rate_clean %>%
+    bind_rows(sejong_unemployment)
 }
 ```
 
-5.4. Unmet Medical Needs
+4.4. Unmet Medical Needs
 
 ```{r}
 # load unmet medical needs data
-# reads the data from excel file containing unmet medical needs by municipality in 2022
-unmet_medical_needs <- read_excel(here::here("variables", "predictor variable", "unmet_medical_needs_rate_by_municipality_2022_2024.xlsx"), col_names=TRUE) %>% 
+# reads the data from Excel file containing unmet medical needs by municipality in 2022
+unmet_medical_needs <- read_excel(
+  here::here("variables", "predictor variable", "unmet_medical_needs_rate_by_municipality_2022_2024.xlsx"),
+  col_names = TRUE
+) %>% 
   # select only relevant columns
   dplyr::select("시군구별(1)", "시군구별(2)", "2022") %>% 
   # translate columns to English
   dplyr::rename(
-     municipality_level_1 = "시군구별(1)", # higher administrative level (province / special/ metropolitan city)
-     municipality_level_2 = "시군구별(2)", # lower administrative level (city / county / district)
-     unmet_medical_needs_rate = "2022"
+    municipality_level_1 = "시군구별(1)",  # higher administrative level (province / special / metropolitan city)
+    municipality_level_2 = "시군구별(2)",  # lower administrative level (city / county / district)
+    unmet_medical_needs_rate = "2022"
   )
 
-# clean and standardise municipality names
+# clean and standardize municipality names
 unmet_medical_needs_clean <- unmet_medical_needs %>% 
-  # remove rows where 'municipality_level_2' is '소계' (subtotal)
+  # remove subtotal rows
   dplyr::filter(municipality_level_2 != "소계") %>% 
-  # standardise province names to be consisent with their names in 2022
-  dplyr::mutate(municipality_level_1 = str_replace(municipality_level_1, "^전북특별자치도", "전라북도"),
-         municipality_level_1 = str_replace(municipality_level_1, "^강원특별자치도", "강원도"),
-         municipality_level_1 = str_replace(municipality_level_1, "^제주특별자치도", "제주도")
-         ) %>% 
-  # combine municipality_level_1 with municipality_level_2 for to get full municipality names
+  # standardize province names to their 2022 equivalents
+  dplyr::mutate(
+    municipality_level_1 = str_replace(municipality_level_1, "^전북특별자치도", "전라북도"),
+    municipality_level_1 = str_replace(municipality_level_1, "^강원특별자치도", "강원도"),
+    municipality_level_1 = str_replace(municipality_level_1, "^제주특별자치도", "제주도")
+  ) %>% 
+  # concatenate higher and lower administrative names
   dplyr::mutate(municipality_clean = paste(municipality_level_1, municipality_level_2)) %>% 
-  # manually handle the error introduced by above for the special case of Sejong Special Self-Governing City
-  dplyr::mutate(municipality_clean = 
-                    ifelse(str_detect(municipality_clean, "세종특별자치시 세종시"),
-      "세종특별자치시", municipality_clean)) %>% 
-  # retain only relevant columns
-  dplyr::select(municipality_clean, unmet_medical_needs_rate) %>%
-  # conveert unmet medical needs rate colun to numeric type
+  # fix Sejong name, which would be incorrectly duplicated
+  dplyr::mutate(municipality_clean = ifelse(
+    str_detect(municipality_clean, "세종특별자치시 세종시"),
+    "세종특별자치시",
+    municipality_clean
+  )) %>% 
+  # retain only final relevant columns
+  dplyr::select(municipality_clean, unmet_medical_needs_rate) %>% 
+  # convert column to numeric type
   dplyr::mutate(unmet_medical_needs_rate = as.numeric(unmet_medical_needs_rate))
+
 ```
 
-5.5. Municipality Population (for expected values & suicide counts)
+4.5. Municipality Population (for expected values & suicide counts)
 
 ```{r}
 # load municipality population data
-# reads resident registration population data in 2022 by municipality from excel file
-municipality_population_2022 <- read_excel(here::here("variables", "predictor variable", "resident_registration_population_by_administrative_district_2022.xlsx"), col_names=TRUE) %>% 
+# reads resident registration population data in 2022 by municipality from Excel file
+municipality_population_2022 <- read_excel(
+  here::here("variables", "predictor variable", "resident_registration_population_by_administrative_district_2022.xlsx"),
+  col_names = TRUE
+) %>%
   # select only relevant columns
-  dplyr::select("행정기관", "총인구수", "남자 인구수", "여자 인구수") %>% 
+  dplyr::select("행정기관", "총인구수", "남자 인구수", "여자 인구수") %>%
   # translate columns to English
   dplyr::rename(
-     municipality = "행정기관",
-     total_population = "총인구수",
-     male_population = "남자 인구수",
-     female_population = "여자 인구수"
-  ) %>% 
-  # standardise municipality names
-  dplyr::mutate(municipality = str_replace(municipality, "^제주특별자치도", "제주도"),
-                # convert population values from strings with commas to numeric
-                total_population = as.numeric(str_replace_all(total_population, ",", "")),
-                male_population = as.numeric(str_replace_all(male_population, ",", "")),
-                female_population = as.numeric(str_replace_all(female_population, ",", "")),) %>% 
-  # filter only for rows where 1. the municipality is Sejong or 2. the municipality name contains exactly one space, ensuring correct administrative level
-  dplyr::filter(municipality == "세종특별자치시" | str_count(municipality, "\\s") == 1) %>% 
-  # remove duplicate entries for Sejong
-  dplyr::distinct() %>% 
-  # rename municipality column to municipality_clean for consistency across datasets
+    municipality = "행정기관",
+    total_population = "총인구수",
+    male_population = "남자 인구수",
+    female_population = "여자 인구수"
+  ) %>%
+  # standardize municipality names and convert population values to numeric
+  dplyr::mutate(
+    municipality = str_replace(municipality, "^제주특별자치도", "제주도"),
+    total_population = as.numeric(str_replace_all(total_population, ",", "")),
+    male_population = as.numeric(str_replace_all(male_population, ",", "")),
+    female_population = as.numeric(str_replace_all(female_population, ",", ""))
+  ) %>%
+  # filter only for:
+  # 1. Sejong Special Self-Governing City OR
+  # 2. municipalities with exactly one space (e.g., "경기도 수원시"), indicating appropriate spatial level
+  dplyr::filter(municipality == "세종특별자치시" | str_count(municipality, "\\s") == 1) %>%
+  # remove duplicates, specifically relevant for Sejong
+  dplyr::distinct() %>%
+  # rename for consistency across datasets
   dplyr::rename(municipality_clean = municipality)
+
 ```
 
-6. Join Predictor Variables into suicide_rate_municipality dataframe
+5. Join Predictor Variables into suicide_rate_municipality dataframe
 
 ```{r}
 # read in a mapping file that converts Korean municipality names to English
 kr_to_en_mapping <- read_excel(here::here("mapping", "korean_to_english_mapping.xlsx"))
 
 # merge all predictor variables with the suicide rate data
-model_df <- suicide_rate_municipality %>% 
+model_df <- suicide_rate_municipality %>%
   # join single-person household ratio
-  dplyr::left_join(., single_person_household_clean, by=c("name" = "municipality_clean")) %>% 
+  dplyr::left_join(single_person_household_clean, by = c("name" = "municipality_clean")) %>%
   # join stress awareness rate
-  dplyr::left_join(., stress_awareness_rate_clean, by=c("name" = "municipality_clean")) %>% 
+  dplyr::left_join(stress_awareness_rate_clean, by = c("name" = "municipality_clean")) %>%
   # join unemployment rate
-  dplyr::left_join(., unemployment_rate_clean, by=c("name" = "municipality_clean")) %>% 
+  dplyr::left_join(unemployment_rate_clean, by = c("name" = "municipality_clean")) %>%
   # join unmet medical needs rate
-  dplyr::left_join(., unmet_medical_needs_clean, by=c("name" = "municipality_clean")) %>% 
+  dplyr::left_join(unmet_medical_needs_clean, by = c("name" = "municipality_clean")) %>%
   # join municipality population data (for expected values & suicide counts)
-  dplyr::left_join(., municipality_population_2022, by=c("name" = "municipality_clean")) %>% 
+  dplyr::left_join(municipality_population_2022, by = c("name" = "municipality_clean")) %>%
   # join Korean-to-English name mapping
-  dplyr::left_join(., kr_to_en_mapping, by=c("name" = "municipality_kr")) %>% 
+  dplyr::left_join(kr_to_en_mapping, by = c("name" = "municipality_kr")) %>%
+  
   # compute additional features
   # calculate municipality area (in km²)
-  dplyr::mutate(., area = as.numeric(set_units(st_area(geometry), "km^2"))) %>% 
+  dplyr::mutate(area = as.numeric(set_units(st_area(geometry), "km^2"))) %>%
+  
   # calculate population density (people per km²)
-  dplyr::mutate(population_density_km2 = round((total_population / area),1)) %>%
-  # calculate estimated suicide count
-  # we use the suicide rate (per 100,000 people) to estimate actual suicide counts from 2022 population
-  # round to the nearest integer for modelling purposes
-  dplyr::mutate(suicide_count = as.integer(round(total_population * suicide_rate / 100000, 0))) %>% 
-  # select rename relevant columns and keep only necessary variables for modelling
-  dplyr::select(code, municipality_en, suicide_count, suicide_rate, single_person_household_ratio, stress_awareness_rate, unemployment_rate, unmet_medical_needs_rate, population_density_km2, total_population) %>% 
-  # rename 'municipality_en' to 'name'
+  dplyr::mutate(population_density_km2 = round(total_population / area, 1)) %>%
+  
+  # estimate suicide count from rate and population
+  dplyr::mutate(suicide_count = as.integer(round(total_population * suicide_rate / 100000, 0))) %>%
+  
+  # keep and rename only relevant columns for modeling
+  dplyr::select(
+    code,
+    municipality_en,
+    suicide_count,
+    suicide_rate,
+    single_person_household_ratio,
+    stress_awareness_rate,
+    unemployment_rate,
+    unmet_medical_needs_rate,
+    population_density_km2,
+    total_population
+  ) %>%
+  # rename English municipality name for modeling
   dplyr::rename(name = municipality_en)
+
 ```
 
-7. Data Preparation for ICAR Model
+6. Stan Modelling Preparation
+
+6.1. RStan Configuration
 
 ```{r}
-# # quick diagnosis with variance-to-mean ratio
-var(model_df$suicide_count) / mean(model_df$suicide_count)
-
-var(model_df$suicide_count)
-
-# # Create histogram for suicide counts
-ggplot(model_df, aes(x = suicide_count)) +
-  geom_histogram(binwidth = 5, fill = "darkblue", color = "white", alpha = 0.7) +
-  geom_density(aes(y = ..count.. * 5), color = "red", size = 1) +
-  labs(title = "Reported Number of Suicide in Korean Municipalities",
-       x = "Suicide Counts",
-       y = "Frequency") +
-  theme_minimal() +
-  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
-        axis.title = element_text(size = 12),
-        axis.text = element_text(size = 10))
-
-# # see lowest count
-min(model_df$suicide_count)
-# see highest count
-max(model_df$suicide_count)
-
-# since we are considering using the Negative Binomial Poisson Regression, let us estimate the over-dispersion parameter using the glm.nb() function
-
-# # fit negative binomial regression null model
-nb_model <- glm.nb(suicide_count ~ 1, data=model_df)
-
-# # extract theta
-theta <- nb_model$theta
-
-theta
-
-# the estimated over-dispersion parameter is 1.28132
-# the theta (dispersion) parameter in a negative binomial model controls the degree of overdispersion relative to a Poisson distribution
-# a higher theta value suggests less overdisperison, while a lower theta value suggests more overdispersion
-# my value is 1.28132, meaning the suicide_count data is overdispersed but not extremely so
-# in a Poisson regression, the variance equals the mean (Var(Y) = E(Y))
-# in a negative binomial model, variance is greater than the mean: Var(Y) = mu + mu^2 / theta
-# NB model can be used to characterise count data where the majority of data points are clustered toward lower values of a variable
-# When choosing between a negative binomial model and a Poisson model, use a negative binomial model if your count data exhibits overdispersion (variance greater than the mean), while a Poisson model is suitable when the variance is roughly equal to the mean in your count data; essentially, the negative binomial model is a more flexible option that can handle situations where the Poisson model's assumptions are not met
-
-# Three types of Poisson models
-# 
-# - Standard Poisson Regression
-# - Negative Binomial Poisson Regression
-# - Zero-Inflated Poisson Regression
-# 
-# The implementation of these models are highly dependent on how the frequency distribution of the count response variable are displayed
-# 
-# If it resembles a normal curve - then use the standard version
-# Otherwise, use the Negative Binomial Poisson regression if there is any evidence of over-dispersion
-# When there is an inflation of zero counts in the dataset, you will have to use the Zero-Inflated Poisson model
-```
-
-7.1. RStan Configuration
-
-```{r}
-# enable parallel processing in RStudio for Stan
-# parallel::detectCores() automatically detects the number of CPU cores available on my local machine
+# enable parallel processing for stan
+# 'parallel::detectCores()' automatically detects the number of cpu cores on the local machine
+# this allows stan to run multiple mcmc chains in parallel to improve performance
 options(mc.cores = parallel::detectCores())
-# rtan_options(auto_write = TRUE) saves compiled models to avoid redundant compilation
+
+# cache compiled stan models to avoid redundant recompilation
+# this speeds up repeated model runs by saving the compiled c++ code
 rstan_options(auto_write = TRUE)
 ```
 
-
-7.2. Calculate Expected Numbers
+6.2. Calculate Expected Numbers
 
 ```{r}
-# in order to estimate the risk of casualties due to suicide across Korean municipalities, we will need to first obtain a column that contains estimated expected number of casualties. This is derived from the total_population column.
-# n.strata = 1 means that no stratification is being applied - the entire dataset is treated as a single stratum
-# this will be used as an offset in our spatial model
-model_df$expected_num <- round(expected(population = model_df$total_population, cases = model_df$suicide_count, n.strata = 1), 0)
+# in order to estimate the risk of casualties due to suicide across korean municipalities,
+# we first derive the expected number of casualties from the total population
+# 'n.strata = 1' means no stratification is applied — the entire dataset is treated as a single stratum
+# this expected value will be used as an offset in the spatial model
+model_df$expected_num <- round(expected(
+  population = model_df$total_population,
+  cases = model_df$suicide_count,
+  n.strata = 1
+), 0)
 ```
 
-7.3. Converting the Spatial Adjacency Matrix to Nodes & Edges
+6.3. Converting the Spatial Adjacency Matrix to Nodes & Edges
 
 ```{r}
 # convert model_df to a spatial object
 # poly2nb() from the spdep package works with sp objects, not sf objects
 model_df_sp <- as(model_df, "Spatial")
 
-# create standard adjacency matrix using Queen contiguity
-# Queen's contiguity considers any shared boundary or shared vertex as a neighbour
-# the 'snap = 200' argument ensures that near-touching polygons within 200m are considered contiguous
+# create standard adjacency matrix using queen contiguity
+# queen's contiguity considers any shared boundary or vertex as a neighbor
+# 'snap = 200' ensures polygons within 200m are considered contiguous
 adj_list <- poly2nb(model_df_sp, queen = TRUE, snap = 200)
 
-# inspect adj_list
-# the list has 6 subgraphs and 4 isolated regions (59, 177, 184, 190) with no links
+# inspect adjacency list
+# the list has 6 subgraphs and 4 isolated regions (e.g., 59, 177, 184, 190) with no links
 adj_list
 
-# we need to convert the list-based adjacency structure into an igraph object to analyse connected components
+# convert the list-based adjacency structure into an igraph object to analyze connected components
 graph_adj <- graph_from_adj_list(adj_list, mode = "all")
 
 # identify subgraph components
 subgraph_labels <- components(graph_adj)$membership
 model_df$subgraph <- as.factor(subgraph_labels)
 
-# find the largest subgraph (mainland Korea)
+# find the largest subgraph (mainland korea)
 largest_subgraph <- which.max(table(subgraph_labels))
 
 # identify all smaller disconnected subgraphs
-# this returns a list of subgraph IDs
 disconnected_subgraphs <- unique(subgraph_labels[subgraph_labels != largest_subgraph])
 
-# inspect disconnected subgraphs
-disconnected_subgraphs  # Should return a list of subgraph IDs
+# inspect the disconnected subgraphs
+disconnected_subgraphs  # should return a list of subgraph ids
 
-# inspect the current state of subgraph connectivity
+# visualise current subgraph connectivity
 ggplot() +
   geom_sf(data = model_df, aes(fill = as.factor(subgraph_labels)), color = "black") +
-  scale_fill_viridis_d(option = "turbo", name = "Subgraph")  +
-  ggtitle("Current Subgraph Connectivity in South Korea") +
+  scale_fill_viridis_d(option = "turbo", name = "subgraph") +
+  ggtitle("current subgraph connectivity in south korea") +
   theme_minimal()
 
 # convert centroids to an sf object
 centroids <- st_centroid(model_df$geometry)
 centroids_sf <- st_as_sf(data.frame(id = 1:length(centroids), geometry = centroids))
 
-# iterate through each disconnected subgraph
+# iterate through each disconnected subgraph and connect it to the mainland
 for (subgraph in disconnected_subgraphs) {
   # find polygons in the current subgraph
   subgraph_polygons <- which(subgraph_labels == subgraph)
-  
-  # find polygons in the largest subgraph (mainland)
+
+  # find polygons in the mainland
   mainland_polygons <- which(subgraph_labels == largest_subgraph)
-  
-  # find nearest polygon in the mainland for each polygon in the subgraph
+
+  # find the nearest polygon in the mainland for each polygon in the subgraph
   closest_mainland <- st_nearest_feature(centroids_sf[subgraph_polygons, ], centroids_sf[mainland_polygons, ])
-  
-  # convert closest_mainland to integer indices
+
+  # convert to integer indices
   closest_mainland <- as.integer(closest_mainland)
-  
-  # update adjacency list to connect subgraph polygons to mainland
+
+  # update the adjacency list with new bidirectional connections
   for (i in seq_along(subgraph_polygons)) {
     island <- subgraph_polygons[i]
     mainland <- closest_mainland[i]
-    
-    # ensure bidirectional connection
+
     adj_list[[island]] <- unique(c(adj_list[[island]], mainland))
     adj_list[[mainland]] <- unique(c(adj_list[[mainland]], island))
   }
 }
 
-# identify which nodes have invalid `0` entries (0, 58) for example
+# identify any nodes with invalid '0' entries (e.g., 59, 177, 184, 190)
 invalid_nodes <- which(sapply(adj_list, function(x) any(x == 0)))
+print(invalid_nodes)  # should show problematic nodes
 
-# print the invalid nodes
-print(invalid_nodes)  # Should show 59, 177, 184, 190, etc.
-
-# loop through adj_list and remove zeroes
+# remove 0s from adjacency list
 adj_list <- lapply(adj_list, function(x) x[x != 0])
 
-# verify that 0s are gone
+# verify that invalid entries are removed
 nodes_to_check <- c(59, 177, 184, 190)
 print(adj_list[nodes_to_check])
 
-# recompute the graph after linking all subgraphs
+# recompute the graph after linking subgraphs
 graph_adj <- graph_from_adj_list(adj_list, mode = "all")
 subgraph_labels <- components(graph_adj)$membership
 model_df$subgraph <- as.factor(subgraph_labels)
@@ -870,35 +848,37 @@ model_df$subgraph <- as.factor(subgraph_labels)
 remaining_disconnected <- unique(subgraph_labels[subgraph_labels != largest_subgraph])
 
 if (length(remaining_disconnected) == 0) {
-  message("All regions are now fully connected.")
+  message("all regions are now fully connected.")
 } else {
-  message("Some subgraphs are still disconnected: ", paste(remaining_disconnected, collapse = ", "))
+  message("some subgraphs are still disconnected: ", paste(remaining_disconnected, collapse = ", "))
 }
 
 # visualise the updated subgraph connectivity
 ggplot() +
   geom_sf(data = model_df, aes(fill = as.factor(subgraph_labels)), color = "black") +
-  scale_fill_viridis_d(option = "turbo", name = "Subgraph") +
-  ggtitle("Updated Subgraph Connectivity in South Korea") +
+  scale_fill_viridis_d(option = "turbo", name = "subgraph") +
+  ggtitle("updated subgraph connectivity in south korea") +
   theme_minimal()
 
 # convert the updated graph to an adjacency matrix
 adjacency_matrix <- as_adjacency_matrix(graph_adj, sparse = TRUE)
 adjacency_matrix <- Matrix::Matrix(as(adjacency_matrix, "sparseMatrix") > 0, sparse = TRUE)
 
-# inspect
+# inspect adjacency matrix
 adjacency_matrix
 ```
 
+6.4. Extract Components for ICAR Model
+
 ```{r}
-# extract the components for the ICAR model using the prep_icar_data function
+# extract the components for the icar model using the prep_icar_data function
 extract_components <- prep_icar_data(adjacency_matrix)
 
 # the extract_components object contains the following key elements:
-# group_size is the total number of areal units observed in the shapefile
-# node1 are indexes of the regions of interest - the focal areas in the adjacency matrix
-# node2 shows corresponding neighbouring regions that are connected to the regions in node1. This defines spatial relationships
-# n_edges represents the number of edges in the network, defining the spatial connections. It transforms the adjacency matrix (based on a Queen contiguity matrix) into a network structure showing which areas are directly connected to others
+# group_size: total number of areal units observed in the shapefile
+# node1: indexes of the regions of interest — the focal areas in the adjacency matrix
+# node2: corresponding neighbouring regions connected to node1 regions — defines spatial relationships
+# n_edges: number of edges in the network — transforms the adjacency matrix into a spatial network of direct connections
 
 # extract key elements
 n <- as.numeric(extract_components$group_size)
@@ -907,10 +887,10 @@ nod2 <- extract_components$node2
 n_edges <- as.numeric(extract_components$n_ed)
 ```
 
-7.4. Create the Dataset to be compiled in Stan
+6.5. Create Dataset to be Compiled in Stan
 
 ```{r}
-# exploratory plotting to estimate individual variable's relationship with target variable
+# exploratory plotting to estimate each predictor's relationship with the target variable
 target_var <- "suicide_rate"
 predictors <- c("single_person_household_ratio", 
                 "stress_awareness_rate", 
@@ -921,184 +901,204 @@ predictors <- c("single_person_household_ratio",
 for (predictor in predictors) {
   p <- ggplot(model_df, aes_string(x = predictor, y = target_var)) +
     geom_point(alpha = 0.5) +  # scatter points with transparency
-    geom_smooth(method = "lm", color = "blue", se = TRUE) +  # dd regression line
+    geom_smooth(method = "lm", color = "blue", se = TRUE) +  # add regression line
     theme_minimal() +
-    labs(title = paste("Scatterplot of", predictor, "vs", target_var),
-         x = predictor,
-         y = target_var) +
+    labs(
+      title = paste("scatterplot of", predictor, "vs", target_var),
+      x = predictor,
+      y = target_var
+    ) +
     theme_classic() +
-    theme(plot.title = element_text(hjust = 0.5)) # center the title
+    theme(plot.title = element_text(hjust = 0.5))  # center the title
   
   print(p)  # display the plot
 }
 
-View(model_df)
 ```
 
 ```{r}
-# the outcome suicide_count, independent variables single_person_household_ratio, stress_awareness_rate, unemployment_rate, unmet_medical_needs_rate, and the offset variable expected_num need to be extracted into separate vectors
-y <- model_df$suicide_count # outcome variable (suicide casualties)
-# extract multiple independent variables into a matrix
+# extract variables for modelling
+# y: outcome variable (suicide casualties)
+y <- model_df$suicide_count
+
+# x: independent variables as a matrix (drop spatial geometry)
 X <- model_df %>%
   st_drop_geometry() %>%
-  dplyr::select(single_person_household_ratio, 
-                stress_awareness_rate,
-                unemployment_rate, 
-                unmet_medical_needs_rate) %>%
+  dplyr::select(
+    single_person_household_ratio, 
+    stress_awareness_rate,
+    unemployment_rate, 
+    unmet_medical_needs_rate
+  ) %>%
   as.matrix()
+
+# e: expected number of cases (used as offset in the model)
 e <- model_df$expected_num
 ```
 
 ```{r}
+# prepare the data list for stan spatial model
 stan_spatial_dataset <- list(
-  N = nrow(model_df) , # number of spatial units
-  N_edges = n_edges, # number of edges in spatial adjacency structure
-  node1 = nod1, # first node in adjacency structure
-  node2 = nod2, # second node in adjacency structure
-  Y = y, # outcome variable (suicide casualties)
-  X = X, # matrix of independent variables (3 predictors)
-  K = ncol(X), # number of independent variables (3)
-  Off_set = e # offset variable (expected_num)
+  N = nrow(model_df),       # number of spatial units
+  N_edges = n_edges,        # number of edges in spatial adjacency structure
+  node1 = nod1,             # first node in adjacency structure
+  node2 = nod2,             # second node in adjacency structure
+  Y = y,                    # outcome variable (suicide casualties)
+  X = X,                    # matrix of independent variables (4 predictors)
+  K = ncol(X),              # number of predictors
+  Off_set = e               # offset variable (expected number of cases)
 )
 
-# inspect
+# inspect the dataset
 stan_spatial_dataset
 ```
 
-7.5. Compiling Stan code for Spatial ICAR Risk Modelling
-
-```{r}
-exp(-0.0014)
-```
-
-
-7.5.1. Printing of the Global Results
+7. Compiling Stan code for Spatial ICAR Risk Modelling
 
 ```{r}
 # start the clock
 ptm <- proc.time()
 
-# fit icar_poisson_stan model
-icar_poisson_fit = stan("icar_poisson_model.stan",
-                        data = stan_spatial_dataset,
-                        iter = 20000,
-                        warmup = 10000,
-                        control = list(max_treedepth = 12),
-                        chain = 6,
-                        verbose = FALSE)
+# fit the icar poisson model using stan
+icar_poisson_fit <- stan(
+  "icar_poisson_model.stan",
+  data = stan_spatial_dataset,
+  iter = 20000,
+  warmup = 10000,
+  control = list(max_treedepth = 12),
+  chains = 6,
+  verbose = FALSE
+)
 
-# stop the clock
+# stop the clock and print runtime
 proc.time() - ptm
 ```
 
 ```{r}
-# save the fitted model locally
+# save the fitted model locally - comment out once run
 # saveRDS(icar_poisson_fit, file = "icar_poisson_fit.rds")
-# load the model later:
+
+# load the model again::
 icar_poisson_fit <- readRDS("icar_poisson_fit.rds")
 ```
 
+7.1. Print Global Coefficients
 
 ```{r}
-# we can see our estimated results for alpha, beta, and sigma
-# all rHAT values are below 1.05, indicating that the iteration performed well
-options(scipen = 999)
-summary(icar_poisson_fit, pars=c("alpha", "beta", "sigma"), probs=c(0.025, 0.975))$summary
+# view estimated results for alpha, beta, and sigma
+# all rhat values below 1.05 indicate good convergence across chains
+options(scipen = 999)  # suppress scientific notation for cleaner output
+
+summary(icar_poisson_fit, pars = c("alpha", "beta", "sigma"), probs = c(0.025, 0.975))$summary
+
+# rhat — all values are ≈ 1, which means the model has converged well across all chains
+# effective sample sizes (n_eff) are all quite large, indicating low autocorrelation in the markov chains
+# (larger n_eff means more precise estimates)
+
+# fixed effect interpretations:
+# single_person_household_ratio and unmet_medical_needs_rate have slightly positive associations with suicide rate
+# unemployment_rate has a borderline significant, negative association with suicide rate
+# stress_awareness_rate has a small, borderline significant negative effect close to 0
+
+# relative risk estimates:
+# single_person_household_ratio (1.01) → 1% increase in risk per unit increase
+# stress_awareness_rate (0.99) → 1% decrease in risk per unit increase
+# unemployment_rate (0.96) → 4% decrease in risk per unit increase (strongest effect)
+# unmet_medical_needs_rate (1.01) → 1% increase in risk per unit increase
+
+# alpha (global baseline):
+# alpha of -0.20 (95% cri: -0.45 to 0.07) indicates a small negative baseline risk for suicide rates
+
+# sigma (standard deviation):
+# sigma of 0.21 (95% cri: 0.16 to 0.27) reflects the overall spatial variability captured by the icar term
 ```
+
+7.2. Print Local Results
 
 ```{r}
 # print full table to avoid some rows from being omitted.
 options(max.print = 100000)
 # print the results
 print(icar_poisson_fit, pars=c("alpha", "beta", "rr_alpha", "rr_beta", "rr_mu", "sigma"), probs=c(0.025, 0.975))
-
-# rHAT- all values are ≈ 1, which means the model has converged well across all chains
-# effective samples size (n_eff) are all quite lare, indicating low autocorrelation in the Markov Chains (larger n_eff means more precise estimates)
-
-# single_person_household_ratio and unmet_medical_needs_rate have slightly positive associations with suicide rate
-# unemployment_rate has a borderline significant, negative association with suicide rate
-# stress_awareness_rate has a small, borderline significant negative effect close to 0
-
-# relative risk estimates
-# single_person_household_ratio (1.01) -> 1% increase in risk per unit increase
-# stress_awareness_rate (0.99) -> 1% decrease in risk per unit increase
-# unemployment_rate (0.96) -> 4% decrease in risk per unit increase (strongest effect)
-# unmet_medical_needs_rate (1.01) -> 1% increase in risk per unit increase
-
-# alpha (global baseline)
-# alpha of -0.20 (95% CrI: -0.45 - 0.07) indicates a small negative baseline risk for suicide rates
-
-# sigma (standard deviation)
-# sigma of 0.21 (95% CrI: 0.16 to 0.27) indicates the overall variance in the model
 ```
 
-```{r}
-# rapid diagnostics of the rHATs
-# diagnostic check on the rHats by putting everything into a data frame
-diagnostic_checks <- as.data.frame(summary(icar_poisson_fit, pars=c("alpha", "beta", "rr_alpha", "rr_beta", "rr_mu", "sigma", "phi", "lp__"), probs=c(0.025, 0.5, 0.975))$summary)
+7.3. Run Quick rHAT Diagnostics
 
-# create binary variable
+```{r}
+# rapid diagnostics of the rhat values
+# extract summary for all key parameters and convert to data frame
+diagnostic_checks <- as.data.frame(
+  summary(icar_poisson_fit, 
+          pars = c("alpha", "beta", "rr_alpha", "rr_beta", "rr_mu", "sigma", "phi", "lp__"), 
+          probs = c(0.025, 0.5, 0.975)
+  )$summary
+)
+
+# create binary variable to flag convergence
 diagnostic_checks$valid <- ifelse(diagnostic_checks$Rhat < 1.05, 1, 0)
 
-# tabulate it
+# tabulate how many parameters passed the rhat threshold - all parameters pass the rhat threshold
 table(diagnostic_checks$valid)
 
-# all output parameters have an rHAT < 1.05
-# it is always good to run about 10000, 15000 or more iterations, as usually shorter iterations yield low effective sample sizes after warn-up samples are discarded - this my lead to complications that cause rHATs to be above 1.05
+# all output parameters have an rhat < 1.05
+# it is always good to run 10000, 15000 or more iterations,
+# as shorter runs often yield low effective sample sizes after warm-up samples are discarded
+# this may lead to convergence issues and rhats above 1.05
 ```
 
-```{r}
-# extraction of area-specific relative risks
-head(summary(icar_poisson_fit, pars = c("rr_mu"), probs = c(0.025, 0.975))$summary)
-# we see the relative risk (RR) estimates for the first areas under the column mu with their corresponding credibility limits (2.5% and 97.5%)
-```
+7.4. Prepare Results to Visualise
 
 ```{r}
-# extract key posterior results for the generated quantities
-relative_risk_results <- as.data.frame(summary(icar_poisson_fit, pars=("rr_mu"), probs = c(0.025, 0.975))$summary)
+# extract key posterior results for the generated quantities (relative risk estimates)
+relative_risk_results <- as.data.frame(
+  summary(icar_poisson_fit, pars = "rr_mu", probs = c(0.025, 0.975))$summary
+)
 
-# clean this table up
+# clean up row names for clarity
 row.names(relative_risk_results) <- 1:nrow(relative_risk_results)
 
-# check for validity of rHATs 
+# check for validity of rhat values
 relative_risk_results$valid <- ifelse(relative_risk_results$Rhat < 1.05, 1, 0)
 
-# rearrange the column into order
-relative_risk_results <- relative_risk_results[, c(1, 4, 5, 7, 8)]
+# rearrange and select relevant columns
+relative_risk_results <- relative_risk_results[, c("mean", "2.5%", "97.5%", "Rhat", "valid")]
 
-# rename the columns appropriately
-colnames(relative_risk_results)[1] <- "rr"
-colnames(relative_risk_results)[2] <- "rrlower"
-colnames(relative_risk_results)[3] <- "rrupper"
-colnames(relative_risk_results)[4] <- "rHAT"
+# rename the columns
+colnames(relative_risk_results) <- c("rr", "rrlower", "rrupper", "rhat", "valid")
 
-# inspect clean table
+# inspect the clean table
 head(relative_risk_results)
 ```
 
 ```{r}
-# insert these columns into our model_df
-model_df$rr <- relative_risk_results[, "rr"]
-model_df$rrlower <- relative_risk_results[, "rrlower"]
-model_df$rrupper <- relative_risk_results[, "rrupper"]
+# insert relative risk estimates into model_df
+model_df$rr <- relative_risk_results$rr
+model_df$rrlower <- relative_risk_results$rrlower
+model_df$rrupper <- relative_risk_results$rrupper
 ```
 
 ```{r}
-# these relative will allow us to see the mapped risks of suicide across South Korean municipalities
-# as well also want a supporting map indicating whether the risks are significant or not, we create an extra column in model_df called significance
+# these relative risk values allow us to map suicide risk across South Korean municipalities
+# we also want a supporting map showing where risks are significantly above or below the baseline
+# to do this, we create a new column in model_df called 'significance'
+
+# significance codes:
+#  1  = significant increase in risk (rrlower > 1)
+# -1  = significant decrease in risk (rrupper < 1)
+#  0  = not significant (credible interval overlaps 1)
+
 model_df$significance <- NA
-model_df$significance[model_df$rrlower < 1 & model_df$rrupper > 1] <- 0 # not significant
-model_df$significance[model_df$rrlower == 1 | model_df$rrupper == 1] <- 0 # not significant
-model_df$significance[model_df$rrlower > 1 & model_df$rrupper > 1] <- 1 # significant increase
-model_df$significance[model_df$rrlower < 1 & model_df$rrupper < 1] <- -1 # significant decrease
+model_df$significance[model_df$rrlower > 1 & model_df$rrupper > 1] <- 1    # significant increase
+model_df$significance[model_df$rrlower < 1 & model_df$rrupper < 1] <- -1   # significant decrease
+model_df$significance[is.na(model_df$significance)] <- 0                   # not significant
 ```
 
 ```{r}
-# map design for relative risk - you want to understand or get a handle on what the distribution for risks look like
+# map design for relative risk — this helps understand how risks are distributed spatially
 summary(model_df$rr)
 hist(model_df$rr)
 
-# Refined risk categories for better separation
+# refined risk categories for clearer interpretation and visual separation
 risk_category_list <- c(
   "≤0.75", 
   "0.76 to 0.85",
@@ -1112,21 +1112,21 @@ risk_category_list <- c(
   ">1.50"
 )
 
-# Define updated colour palette
+# define a custom color palette for these categories
 RRPalette <- c(
-  "#4575B4",  # Dark blue (≤ 0.75)
-  "#5EA9D4",  # Medium blue (0.76 - 0.85)
-  "#74ADD1",  # Light blue (0.86 - 0.95)
-  "#ABD9E9",  # Pale blue (0.96 - 1.00)
-  "#E0F3F8",  # Very light blue (1.01 - 1.05)
-  "#FFFFBF",  # White-yellow (1.06 - 1.10)
-  "#FEE08B",  # Light orange (1.11 - 1.18)
-  "#FDAE61",  # Orange (1.19 - 1.25)
-  "#F46D43",  # Dark orange-red (1.26 - 1.50)
-  "#A50026"   # Deep red (> 1.50)
+  "#4575B4",  # dark blue
+  "#5EA9D4",  # medium blue
+  "#74ADD1",  # light blue
+  "#ABD9E9",  # pale blue
+  "#E0F3F8",  # very light blue
+  "#FFFFBF",  # yellow-white
+  "#FEE08B",  # light orange
+  "#FDAE61",  # orange
+  "#F46D43",  # dark orange-red
+  "#A50026"   # deep red
 )
 
-# assign refined risk categories
+# assign numeric bins for relative risk values
 model_df$relative_risk_cat <- NA
 model_df$relative_risk_cat[model_df$rr <= 0.75] <- -4
 model_df$relative_risk_cat[model_df$rr > 0.75 & model_df$rr <= 0.85] <- -3
@@ -1139,49 +1139,27 @@ model_df$relative_risk_cat[model_df$rr > 1.18 & model_df$rr <= 1.25] <- 3
 model_df$relative_risk_cat[model_df$rr > 1.25 & model_df$rr <= 1.50] <- 4
 model_df$relative_risk_cat[model_df$rr > 1.50] <- 5
 
-# check the category distribution
+# convert to factor and assign labels for plotting
+model_df$relative_risk_cat <- factor(
+  model_df$relative_risk_cat,
+  levels = -4:5,
+  labels = risk_category_list
+)
+
+# check distribution of categories
 table(model_df$relative_risk_cat)
 ```
 
+7.5. Map of Relative Risk and Statistical Significance
+
 ```{r}
+# create relative risk map
 rr_map <- tm_shape(model_df) + 
-   tm_polygons("relative_risk_cat",
+  tm_polygons("relative_risk_cat",
               style = "cat",
               title = "Relative Risk",
               palette = RRPalette,
               labels = risk_category_list,
-              border.col = "black",
-              border.alpha = 0.2) +
-tm_shape(sk_provinces_2022) +
-  tm_borders(lwd = 1, col = "black") +
-  tm_scale_bar(position = c("left", "bottom"), width = 0.1, text.size = 0.4) +
-  tm_compass(position = c("right", "top"), size = 1, type = "arrow") +
-  tm_layout(
-    frame = TRUE,
-    legend.title.size = 0.9,
-    legend.text.size = 0.7,
-    legend.frame = TRUE
-  )
-
-
-# inspect
-rr_map
-
-# save the tmap as a PNG image in the "assets" folder
-tmap_save(tm = rr_map,
-          filename = here::here("assets", "relative_risk", "relative_risk_map_2022.png"),
-          width = 7,      # width in inches
-          height = 9,    # height in inches
-          dpi = 300,      # high-resolution
-         )
-
-# map of significance regions
-sg_map <- tm_shape(model_df) + 
-  tm_polygons("significance",
-              style = "cat",
-              title = "Significance Categories",
-              palette = c("#33a6fe", "white", "#fe0000"),
-              labels = c("Significantly low", "Not Significant", "Significantly high"),
               border.col = "black",
               border.alpha = 0.2) +
   tm_shape(sk_provinces_2022) +
@@ -1195,107 +1173,149 @@ sg_map <- tm_shape(model_df) +
     legend.frame = TRUE
   )
 
-# inspect
-sg_map
+# inspect map
+rr_map
 
-# save the tmap as a PNG image in the "assets" folder
-tmap_save(tm = sg_map,
-          filename = here::here("assets", "significance_categories", "significance_categories_map_2022.png"),
-          width = 7,      # width in inches
-          height = 9,    # height in inches
-          dpi = 300,      # high-resolution
-         )
+# save relative risk map to PNG
+tmap_save(tm = rr_map,
+          filename = here::here("assets", "relative_risk", "relative_risk_map_2022.png"),
+          width = 7,
+          height = 9,
+          dpi = 300)
 
-# create side-by-side plot
-# tmap_arrange(rr_map, sg_map, ncol = 2, nrow = 1)
-```
-
-```{r}
-# exceedance probabilities allows the user the quantify the levels of uncertainty surrounding the risk we quantified
-# we can use a threshold for instance RR > 1 and ask what is the probability that an area has an excess risk of suicide casualties and viualise as well
-# for this extraction, we need to use functions from the tidybayes and tidyverse packages i.e. spread_draws(), group_by(), summarise(), and pull()
-# extract the exceedance probabilities from the icar_poisson_fit object and compute the probability that an area has a relative riks raio > 1.0
-threshold <- function(x){mean(x > 1.00)}
-
-exceedance_probability <- icar_poisson_fit %>%
-  spread_draws(rr_mu[i]) %>% 
-  group_by(i) %>% 
-  summarise(rr_mu=threshold(rr_mu)) %>% 
-  pull(rr_mu)
-
-# insert the exceedance values into model_df
-model_df$exceedance_probability <- exceedance_probability
-```
-
-```{r}
-# create the labels for the probabilities
-prob_cat_list <- c("<0.01", "0.01-0.09", "0.10-0.19", "0.20-0.29", "0.30-0.39", "0.40-0.49","0.50-0.59", "0.60-0.69", "0.70-0.79", "0.80-0.89", "0.90-0.99", "1.00")
-
-# categorising the probabilities in bands of 10s
-model_df$prob_cat <- NA
-model_df$prob_cat[model_df$exceedance_probability>=0 & model_df$exceedance_probability< 0.01] <- 1
-model_df$prob_cat[model_df$exceedance_probability>=0.01 & model_df$exceedance_probability< 0.10] <- 2
-model_df$prob_cat[model_df$exceedance_probability>=0.10 & model_df$exceedance_probability< 0.20] <- 3
-model_df$prob_cat[model_df$exceedance_probability>=0.20 & model_df$exceedance_probability< 0.30] <- 4
-model_df$prob_cat[model_df$exceedance_probability>=0.30 & model_df$exceedance_probability< 0.40] <- 5
-model_df$prob_cat[model_df$exceedance_probability>=0.40 & model_df$exceedance_probability< 0.50] <- 6
-model_df$prob_cat[model_df$exceedance_probability>=0.50 & model_df$exceedance_probability< 0.60] <- 7
-model_df$prob_cat[model_df$exceedance_probability>=0.60 & model_df$exceedance_probability< 0.70] <- 8
-model_df$prob_cat[model_df$exceedance_probability>=0.70 & model_df$exceedance_probability< 0.80] <- 9
-model_df$prob_cat[model_df$exceedance_probability>=0.80 & model_df$exceedance_probability< 0.90] <- 10
-model_df$prob_cat[model_df$exceedance_probability>=0.90 & model_df$exceedance_probability< 1.00] <- 11
-model_df$prob_cat[model_df$exceedance_probability == 1.00] <- 12
-
-# check to see if legend scheme is balanced
-table(model_df$prob_cat)
-
-View(model_df)
-```
-
-```{r}
-# define a lighter custom palette
-light_gnbu <- c(
-  "#f7fcf0", "#e0f3db", "#ccebc5", "#a8ddb5", "#7bccc4",
-  "#4eb3d3", "#2b8cbe", "#0868ac", "#084081"
-)
-
-# map of exceedance probabilities
-ep_map <- tm_shape(model_df) + 
-    tm_polygons("prob_cat",
-            style = "cat",
-            title = "Probability",
-            palette = light_gnbu,
-            labels = prob_cat_list,
-            border.col = "black",
-            border.alpha = 0.2) +
-tm_shape(sk_provinces_2022) +
+# create significance map
+sg_map <- tm_shape(model_df) + 
+  tm_polygons("significance",
+              style = "cat",
+              title = "Significance Categories",
+              palette = c("#33a6fe", "white", "#fe0000"),
+              labels = c("Significantly low", "Not significant", "Significantly high"),
+              border.col = "black",
+              border.alpha = 0.2) +
+  tm_shape(sk_provinces_2022) +
     tm_borders(lwd = 1, col = "black") +
-tm_scale_bar(position = c("left", "bottom"), width = 0.1, text.size = 0.4) +
-tm_compass(position = c("right", "top"), size = 1, type = "arrow") +
-tm_layout(
+  tm_scale_bar(position = c("left", "bottom"), width = 0.1, text.size = 0.4) +
+  tm_compass(position = c("right", "top"), size = 1, type = "arrow") +
+  tm_layout(
     frame = TRUE,
     legend.title.size = 0.9,
     legend.text.size = 0.7,
     legend.frame = TRUE
   )
 
-# inspect
-ep_map
+# inspect map
+sg_map
 
-# save the tmap as a PNG image in the "assets" folder
-tmap_save(tm = ep_map,
-          filename = here::here("assets", "exceedance_probabilities", "exceedance_probabilities_map_2022.png"),
-          width = 7,      # width in inches
-          height = 9,    # height in inches
-          dpi = 300,      # high-resolution
-         )
-
-# the map display exceedance probabilities for suicide risk across South Korea, providing a spatial visualisation of regions where the risk surpasses a given threshold
-# the probability values range from <0.01 (very low risk) to 1.00 (very high risk), illustrating the heterogeneity of suicide risk across different administrative areas
-# Seoul and surrounding metropolitan areas exhibit lower exceedance probabilities (0.01 - 0.39)
-# this suggests that the relative suicide risk is lower in the capital regions compared to other parts of the country
-# the majority of the country, particularly rural and peripheral regions, exhibit higher exceedance probabilities (0.50 - 1.00)
-# metropolitan cities in general show lower levels of suicide risk compared to those of rural areas
-# there seems to be a strong evidence of spatial clustering
+# save significance map to PNG
+tmap_save(tm = sg_map,
+          filename = here::here("assets", "significance_categories", "significance_categories_map_2022.png"),
+          width = 7,
+          height = 9,
+          dpi = 300)
 ```
 
+7.6. Data Preparation for Exceedance Probabilities Mapping
+
+```{r}
+# exceedance probabilities allow us to quantify uncertainty around spatial risk estimates
+# we define a threshold (e.g., rr > 1) and compute the probability that each area exceeds it
+# this helps visualise where elevated risk is not only high, but statistically probable
+
+# for this extraction, we use functions from tidybayes and tidyverse: spread_draws(), group_by(), summarise(), pull()
+threshold <- function(x) { mean(x > 1.00) }
+
+# extract exceedance probabilities from the model
+exceedance_probability <- icar_poisson_fit %>%
+  spread_draws(rr_mu[i]) %>% 
+  group_by(i) %>% 
+  summarise(rr_mu = threshold(rr_mu)) %>% 
+  pull(rr_mu)
+
+# insert exceedance probabilities into model_df
+model_df$exceedance_probability <- exceedance_probability
+```
+
+```{r}
+# create the labels for the exceedance probability categories
+prob_cat_list <- c(
+  "<0.01", "0.01-0.09", "0.10-0.19", "0.20-0.29", "0.30-0.39", "0.40-0.49",
+  "0.50-0.59", "0.60-0.69", "0.70-0.79", "0.80-0.89", "0.90-0.99", "1.00"
+)
+
+# categorise the exceedance probabilities into 12 bands
+model_df$prob_cat <- NA
+model_df$prob_cat[model_df$exceedance_probability >= 0 & model_df$exceedance_probability < 0.01] <- 1
+model_df$prob_cat[model_df$exceedance_probability >= 0.01 & model_df$exceedance_probability < 0.10] <- 2
+model_df$prob_cat[model_df$exceedance_probability >= 0.10 & model_df$exceedance_probability < 0.20] <- 3
+model_df$prob_cat[model_df$exceedance_probability >= 0.20 & model_df$exceedance_probability < 0.30] <- 4
+model_df$prob_cat[model_df$exceedance_probability >= 0.30 & model_df$exceedance_probability < 0.40] <- 5
+model_df$prob_cat[model_df$exceedance_probability >= 0.40 & model_df$exceedance_probability < 0.50] <- 6
+model_df$prob_cat[model_df$exceedance_probability >= 0.50 & model_df$exceedance_probability < 0.60] <- 7
+model_df$prob_cat[model_df$exceedance_probability >= 0.60 & model_df$exceedance_probability < 0.70] <- 8
+model_df$prob_cat[model_df$exceedance_probability >= 0.70 & model_df$exceedance_probability < 0.80] <- 9
+model_df$prob_cat[model_df$exceedance_probability >= 0.80 & model_df$exceedance_probability < 0.90] <- 10
+model_df$prob_cat[model_df$exceedance_probability >= 0.90 & model_df$exceedance_probability < 1.00] <- 11
+model_df$prob_cat[model_df$exceedance_probability == 1.00] <- 12
+
+# check distribution of exceedance probability categories
+table(model_df$prob_cat)
+```
+
+7.7. Map of Exceedance Probabilities
+
+```{r}
+# define a lighter custom palette for exceedance probability categories
+light_gnbu <- c(
+  "#f7fcf0", "#e0f3db", "#ccebc5", "#a8ddb5", "#7bccc4",
+  "#4eb3d3", "#2b8cbe", "#0868ac", "#084081"
+)
+
+# create the exceedance probability map
+ep_map <- tm_shape(model_df) + 
+  tm_polygons("prob_cat",
+              style = "cat",
+              title = "Probability",
+              palette = light_gnbu,
+              labels = prob_cat_list,
+              border.col = "black",
+              border.alpha = 0.2) +
+  tm_shape(sk_provinces_2022) +
+    tm_borders(lwd = 1, col = "black") +
+  tm_scale_bar(position = c("left", "bottom"), width = 0.1, text.size = 0.4) +
+  tm_compass(position = c("right", "top"), size = 1, type = "arrow") +
+  tm_layout(
+    frame = TRUE,
+    legend.title.size = 0.9,
+    legend.text.size = 0.7,
+    legend.frame = TRUE
+  )
+
+# inspect the map
+ep_map
+
+# save the map as a high-resolution PNG
+tmap_save(tm = ep_map,
+          filename = here::here("assets", "exceedance_probabilities", "exceedance_probabilities_map_2022.png"),
+          width = 7,
+          height = 9,
+          dpi = 300)
+
+# interpretation:
+# the map displays exceedance probabilities for suicide risk across south korea,
+# visualising the likelihood that each municipality exceeds a relative risk threshold of 1.00
+
+# values range from <0.01 (very low exceedance probability) to 1.00 (very high),
+# illustrating the spatial heterogeneity in suicide risk
+
+# seoul and surrounding metropolitan areas show low exceedance probabilities (0.01–0.39),
+# suggesting lower relative suicide risk in capital regions compared to the national average
+
+# rural and peripheral regions tend to exhibit higher exceedance probabilities (0.50–1.00),
+# indicating stronger evidence of elevated suicide risk outside major urban centers
+
+# metropolitan cities in general show lower levels of suicide risk than rural areas
+
+# this pattern provides strong evidence of spatial clustering in suicide risk across the country
+```
+
+This marks the end of the analysis.
