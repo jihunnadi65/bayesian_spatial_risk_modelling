@@ -4,25 +4,26 @@
 \usepackage[a4paper,margin=2cm]{geometry}
 
 % --- Typography and section formatting ---
-\usepackage{titlesec}
+\usepackage{parskip} % Adds space between paragraphs
+\usepackage{titlesec} % Custom section formatting
 \titleformat{\section}{\normalfont\Large\bfseries}{}{0pt}{}
 \titleformat{\subsection}{\normalfont\large\bfseries}{}{0pt}{}
-\usepackage{parskip}
+
+% --- Math and symbols ---
+\usepackage{amsmath} % For math environments
 
 % --- Figures and tables ---
-\usepackage{graphicx}
-\usepackage{float}
-\usepackage{booktabs}
-\usepackage{caption}
-\usepackage{subcaption}
-\captionsetup[figure]{justification=centering}
-\usepackage{url}
-\usepackage{booktabs}
-\usepackage{array}
-\newcolumntype{M}[1]{>{\centering\arraybackslash}m{#1}}
-\usepackage{amsmath}
-\usepackage[font=small,skip=4pt]{caption}
-\usepackage{subcaption}
+\usepackage{graphicx} % For including graphics
+\usepackage{float} % For figure placement
+\usepackage{caption} % For customizing captions
+\usepackage{subcaption} % For subfigures
+\captionsetup[figure]{justification=centering, font=small, skip=4pt}
+\usepackage{booktabs} % Nicer tables
+\usepackage{array} % Extended table formatting
+\newcolumntype{M}[1]{>{\centering\arraybackslash}m{#1}} % Centered column type
+
+% --- URLs and hyperlinks ---
+\usepackage{url} % For URL formatting
 
 % --- Document starts here ---
 \begin{document}
@@ -35,19 +36,19 @@
 	
 	South Korea consistently reports one of the highest suicide rates among developed nations, with 24 to 28 deaths per 100,000 people in recent years—more than twice the OECD average of 11 (Kim, 2024). This persistent trend positions South Korea as a global outlier and underscores the urgent need to investigate its underlying risk factors. Classical theories dating back to Durkheim (1951) emphasise the protective role of social integration, while recognising economic hardship and mental illness as key drivers of suicide. In South Korea, national crises such as the late-1990s Asian financial crash have been linked to suicide spikes, primarily through rising unemployment and social dislocation (Chang, 2009).
 	
-	The analysis draws on a Bayesian Intrinsic Conditional Auto-Regressive (ICAR) model to estimate spatial variation in suicide risk across South Korea, using four key covariates: social isolation, psychological stress, unemployment, and unmet medical needs. Areas with more single-person households or divorced residents tend to report higher suicide rates, with higher rates observed in areas with weaker social ties (Jang, 2022). High levels of perceived stress, measured through the “stress awareness” indicator, are associated with depression, suicidal ideation, and increased regional suicide rates (Oh, 2020). Unemployment contributes to financial strain and psychological distress, and its association with higher suicide rates is particularly evident where social safety nets are weak (Park \& Lester, 2006). Lastly, unmet medical needs—reflecting limited healthcare access—are correlated with higher suicide mortality, with only about 15\% of affected individuals receiving treatment despite the high prevalence of mental health conditions (Kim, 2022).
+	Four key factors have been linked to elevated suicide risk in South Korea: social isolation, psychological stress, unemployment, and unmet medical needs. Areas with more single-person households or divorced residents tend to report higher suicide rates, with higher rates observed in areas with weaker social ties (Jang, 2022). High levels of perceived stress, measured through the “stress awareness” indicator, are associated with depression, suicidal ideation, and increased regional suicide rates (Oh, 2020). Unemployment contributes to financial strain and psychological distress, and its association with higher suicide rates is particularly evident where social safety nets are weak (Park \& Lester, 2006). Lastly, unmet medical needs—reflecting limited healthcare access—are correlated with higher suicide mortality, with only about 15\% of affected individuals receiving treatment despite the high prevalence of mental health conditions (Kim, 2022).
 	
-	To account for spatial variation in suicide risk, the Bayesian ICAR model incorporates information from adjacent regions to produce stable small-area risk estimates. Key outputs include both localised estimates of relative risk and global regression coefficients for the four covariates, providing an evidence base to inform public health interventions and guide regional resource allocation.
+	This study employs a Bayesian Intrinsic Conditional Auto-Regressive (ICAR) model to estimate spatial variation in suicide risk across South Korea, using the four covariates above. Key outputs include localised estimates of relative risk and global regression coefficients, providing an evidence base to support public health interventions and regional resource allocation.
 
 	\section*{2. Data and Methods}
 	
 	\subsection*{2.1 Study Area}	
 	
-	The study area encompasses all 229 municipalities in South Korea, including cities (\textit{shi}), counties (\textit{kun}), and districts (\textit{ku}), collectively referred to as \textit{shikunku}-level administrative units. This spatial resolution was selected as it represents the most granular level at which all covariates are consistently available and corresponds to the administrative scale at which suicide prevention policies are typically developed and implemented. Spatial boundaries were derived from official 2022 shapefiles, to which all statistical datasets were harmonised by resolving naming inconsistencies, aggregating sub-municipal divisions, and reversing backdated administrative updates. To ensure full connectivity in the Queen's contiguity adjacency matrix, disconnected island polygons were linked to the mainland subgraph using nearest-neighbour centroids.
+	The study area encompasses all 229 municipalities in South Korea, including cities (\textit{shi}), counties (\textit{kun}), and districts (\textit{ku}), collectively referred to as \textit{shikunku}-level administrative units. This spatial resolution was selected as it represents the most granular level at which all covariates are consistently available and corresponds to the administrative scale at which suicide prevention policies are typically developed and implemented. Spatial boundaries were derived from official 2022 shapefiles, to which all statistical datasets were harmonised by resolving naming inconsistencies, aggregating sub-municipal divisions, and reversing backdated administrative updates. To ensure full connectivity in the Queen contiguity adjacency matrix, disconnected island polygons were linked to the mainland subgraph using nearest-neighbour centroids.
 	
 	\subsection*{2.2 Data}
 	
-	The primary outcome variable is the estimated number of suicide deaths in 2022 at the municipality (\textit{shikunku}) level. This was calculated by multiplying the age-standardised suicide rate (per 100,000 people) by the mid-year population for each municipality. Suicide rates were obtained from Statistics Korea’s \textit{Cause of Death Statistics}, while population estimates originate from the 2022 \textit{Future Population Projections}. This indirect method was necessary due to the absence of disaggregated suicide counts at this spatial resolution.
+	The primary outcome variable is the estimated number of \textit{shikunku}-level suicide deaths in 2022. This was calculated by multiplying the age-standardised suicide rate (per 100,000 people) by the mid-year population for each municipality. Suicide rates were obtained from Statistics Korea’s \textit{Cause of Death Statistics}, while population estimates originate from the 2022 \textit{Future Population Projections}.
 		
 	Four predictor variables were selected based on their relevance in the literature: the single-person household ratio, stress awareness rate, unemployment rate, and unmet medical needs rate. All variables reflect conditions in 2022 and were obtained from national databases, as summarised in Table~\ref{tab:datasets}. Figure~\ref{fig:suicide_map_2022} provides a visual overview of suicide rates across the country.
 	
@@ -77,14 +78,14 @@
 	\begin{figure}[H]
 		\centering
 		\caption{Suicide Rates Across Municipalities}
-		\includegraphics[width=0.74\textwidth]{assets/suicide_map/suicide_map_2022_annotated.png}
+		\includegraphics[width=0.8\textwidth]{assets/suicide_map/suicide_map_2022_annotated.png}
 		\label{fig:suicide_map_2022}
 	\end{figure}
 	
 	\newpage
 	\subsection*{2.3 Methods}
 	
-	We employed a Bayesian Poisson regression model with spatial effects to estimate the relative risk (RR) of suicide mortality across South Korean municipalities. To account for spatial autocorrelation among neighbouring areas, a structured spatial random effect was included using an intrinsic conditional autoregressive (ICAR) prior (Besag et al., 1991), a standard approach in spatial epidemiology. An unstructured random effect was also added to capture residual heterogeneity not explained by spatial structure or covariates.
+	We employed a Bayesian Poisson regression model with spatial effects to estimate the relative risk (RR) of suicide mortality across South Korean municipalities. To account for spatial autocorrelation among neighbouring areas, a structured spatial random effect was included using an intrinsic conditional autoregressive (ICAR) prior (Besag, 1991), a standard approach in spatial epidemiology. An unstructured random effect was also added to capture residual heterogeneity not explained by spatial structure or covariates.
 	
 	The model assumes a Poisson likelihood with a log link and a population-based offset, which is appropriate for modelling rare event counts in small-area epidemiological studies. Spatial adjacency was defined using Queen contiguity, where municipalities sharing either a boundary or vertex were considered neighbours.
 
@@ -112,7 +113,7 @@
 	
 	\vspace{1em}
 	
-	All priors were weakly informative, centred around zero to regularise estimates while allowing sufficient flexibility to reflect uncertainty without dominating the posterior. Model fitting was performed in \textit{Stan} using the \textit{rstan} interface in R. We ran six parallel chains with 20,000 iterations each (10,000 warm-up), using the No-U-Turn Sampler (NUTS) with a maximum tree depth of 12.
+	All priors were weakly informative, centred around zero to regularise estimates while allowing flexibility to reflect uncertainty without dominating the posterior. Model fitting was performed in \textit{Stan} using the \textit{rstan} interface in R. We ran six parallel chains with 20,000 iterations each (10,000 warm-up), using the No-U-Turn Sampler (NUTS) with a maximum tree depth of 12.
 	
 	\newpage
 	\section*{3. Results and Discussion}
@@ -148,9 +149,9 @@
 	
 	The model converged successfully with all $\hat{R}$ values below 1.05 and large effective sample sizes, indicating stable posterior estimates. The global intercept ($\alpha = -0.20$) corresponds to a relative risk (RR) of $\exp(-0.20) \approx 0.82$ (95\% CrI: 0.63 to 1.07), suggesting slightly lower-than-expected baseline suicide risk. However, the result is not statistically significant, as the credible interval includes the null value of 1.00.
 	
-	Among the covariates, the unemployment rate ($\beta_3$) showed the strongest and statistically significant association: a one-unit increase corresponds to a 4\% decrease in suicide risk ($RR \approx 0.96$; 95\% CrI: 0.93 to 0.99). The single-person household ratio ($\beta_1$) and unmet medical needs rate ($\beta_4$) had weak positive associations ($RR \approx 1.01$), but their credible intervals approached or included 1.00, indicating limited significance. Stress awareness ($\beta_2$) was negatively associated with suicide risk ($RR \approx 0.99$), though the effect was marginal.
+	Among the covariates, the unemployment rate ($\beta_3$) showed the strongest and statistically significant association: a one-unit increase corresponds to a 4\% decrease in suicide risk ($RR \approx 0.96$; 95\% CrI: 0.93 to 0.99). The single-person household ratio ($\beta_1$) and unmet medical needs rate ($\beta_4$) had weak positive associations ($RR \approx 1.01$), but their credible intervals approached or included 1.00, indicating limited significance. Stress awareness ($\beta_2$) was negatively associated with suicide risk ($RR \approx 0.99$) but was not statistically significant.
 	
-	The spatial standard deviation ($\sigma = 0.21$; 95\% CrI: 0.16 to 0.27) indicates a meaningful level of spatial heterogeneity, supporting the inclusion of structured spatial effects in the model.
+	The spatial standard deviation ($\sigma = 0.21$) indicates a meaningful level of spatial heterogeneity, supporting the inclusion of structured spatial effects in the model.
 	
 	\newpage
 	\subsection*{3.2 Spatial Distribution of Relative Risk}
@@ -193,36 +194,40 @@
 	\newpage
 	\subsection*{3.3 Discussion}
 	
-	These results carry important policy implications. Most notably, the unemployment rate showed the strongest association with suicide risk, with a one-unit increase linked to a 4\% decrease in relative risk. Although counter-intuitive, this may reflect the buffering effect of South Korea's unemployment benefits, which allow individuals to maintain economic stability while avoiding chronic workplace stressors. Robust safety nets may provide psychological protection, but they may also incentivise withdrawal from the highly stressful labour market, raising concerns about economic inactivity and long-term fiscal strain. These findings suggest that improving workplace mental health should be a priority, rather than blindly expanding welfare provisions.
+	Among the four covariates, only unemployment was significantly associated with suicide risk, with a one-unit increase corresponding to a 4\% decrease in relative risk. Although counter-intuitive, this may reflect the buffering effect of South Korea's unemployment benefits, which allow individuals to maintain economic stability while avoiding chronic workplace stressors. Robust safety nets may provide psychological protection, but they may also incentivise withdrawal from the highly stressful labour market, raising concerns about economic inactivity and long-term fiscal strain. These findings suggest that improving workplace mental health should be a priority, rather than expanding existing welfare provisions.
+
+	Geographically, a sharp divide emerges between the Seoul Metropolitan Area and the rest of the country. Rural municipalities exhibit consistently higher relative risk and exceedance probabilities, while Seoul, Incheon, and Gyeonggi-do appear comparatively insulated. To address these disparities, policymakers should prioritise decentralised mental health services and pursue regional development strategies that foster economic opportunity and social cohesion outside the capital.
 	
-	Single-person household ratio and unmet medical needs rate show weak but positive associations with suicide risk, highlighting the relevance of social connection and access to healthcare. These findings align with existing literature and support continued investment in community formation, outreach to isolated individuals, and expansion of affordable mental health services.
-	
-	Geographically, a sharp divide emerges between the Seoul Metropolitan Area and the rest of the country. Rural municipalities exhibit consistently higher relative risk and exceedance probabilities, while Seoul, Incheon, and Gyeonggi-do appear comparatively insulated. This suggests that national strategies risk neglecting the distinct vulnerabilities of peripheral regions, especially when policymakers themselves are based in the capital region. To address these disparities, policymakers should prioritise decentralised mental health services and pursue regional development strategies that foster economic opportunity and social cohesion outside the capital.
-	
-	Several limitations should be acknowledged. Although preliminary diagnostics indicated modest overdispersion in suicide counts ($\theta \approx 1.28$), we opted for a Poisson model for its interpretability and established use in spatial epidemiology. The manual linking of disconnected subgraphs using centroid proximity ensured spatial contiguity but may not reflect true socioeconomic similarity, potentially biasing results in island geographies. The analysis is cross-sectional and based solely on 2022 data, limiting its ability to capture temporal dynamics. Finally, the observed relationship between unemployment and suicide risk may be confounded by unmeasured factors such as informal employment or labour market inactivity, which are not captured in standard unemployment statistics.
-	
-	Despite these limitations, the study offers meaningful insight into the geography of suicide risk in South Korea. The findings underscore the urgent need for spatially targeted interventions and regionally responsive policy design.
+	Several limitations should be acknowledged. The manual linking of disconnected subgraphs using centroid proximity ensured spatial contiguity but may not reflect true socioeconomic similarity, potentially biasing results in island geographies. The analysis is cross-sectional and based solely on 2022 data, limiting its ability to capture temporal dynamics. Lastly, the observed relationship between unemployment and suicide risk may be confounded by unmeasured factors such as informal employment or labour market inactivity, which are not captured in standard unemployment statistics. Nevertheless, the study provides meaningful insight into the geography of suicide risk in South Korea and demonstrates the urgent need for spatially targeted interventions and evidence-informed policy design.
 	
 	\newpage
 	\begin{flushleft}
 		\begin{thebibliography}{9}
+			
+			\bibitem{Besag1991}
+			Besag, J., York, J., \& Mollié, A. (1991). Bayesian image restoration, with two applications in spatial statistics. \textit{Annals of the Institute of Statistical Mathematics}, 43(1), 1--20. \url{https://doi.org/10.1007/BF00116466}
+			
+			\bibitem{Chang2009}
+			Chang, S.-S., Gunnell, D., Sterne, J.A.C., Lu, T.-H., \& Cheng, A.T.A. (2009). Was the economic crisis 1997–1998 responsible for rising suicide rates in East/Southeast Asia? A time–trend analysis for Japan, Hong Kong, South Korea, Taiwan, Singapore and Thailand. \textit{Social Science \& Medicine}, 68(7), 1322–1331. \url{https://doi.org/10.1016/j.socscimed.2009.01.010}
+			
+			\bibitem{Durkheim1951}
+			Durkheim, É. (1951). \textit{Suicide: A Study in Sociology}. Glencoe, IL: Free Press.
+			
+			\bibitem{Jang2022}
+			Jang, H., Lee, W., Kim, Y., \& Kim, H. (2022). Suicide rate and social environment characteristics in South Korea: the roles of socioeconomic, demographic, urbanicity, general health behaviors, and other environmental factors on suicide rate. \textit{BMC Public Health}, 22(1). \url{https://doi.org/10.1186/s12889-022-12843-4}
+			
 			\bibitem{Kim2024}
-			Kim, E., \& Kim, S. (2024). \textit{Spatially clustered patterns of suicide mortality rates in South Korea: a geographically weighted regression analysis}. BMC Public Health, 24(1). doi:\url{https://doi.org/10.1186/s12889-024-19899-4}.
+			Kim, E., \& Kim, S. (2024). Spatially clustered patterns of suicide mortality rates in South Korea: a geographically weighted regression analysis. \textit{BMC Public Health}, 24(1). \url{https://doi.org/10.1186/s12889-024-19899-4}
 			
-			\bibitem{Lee2011}
-			Lee, D. (2011). \textit{A comparison of conditional autoregressive models used in Bayesian disease mapping}. Spatial and Spatio-temporal Epidemiology, 2(2), 79--89.
+			\bibitem{Oh2020}
+			Oh, B., Yun, J.-Y., Yeo, E.C., Kim, D.-H., Kim, J., \& Cho, B.-J. (2020). Prediction of Suicidal Ideation among Korean Adults Using Machine Learning: A Cross-Sectional Study. \textit{Psychiatry Investigation}, 17(4), 331–340. \url{https://doi.org/10.30773/pi.2019.0270}
 			
-			\bibitem{Rue2005}
-			Rue, H., Martino, S., \& Chopin, N. (2009). \textit{Approximate Bayesian inference for latent Gaussian models using integrated nested Laplace approximations (INLA)}. Journal of the Royal Statistical Society, Series B, 71(2), 319--392.
-			
-			\bibitem{StatisticsKorea2022}
-			Statistics Korea. (2023). \textit{Population and Health Indicators by Municipality}. Daejeon: KOSIS.
+			\bibitem{Park2006}
+			Park, B.C.B., \& Lester, D. (2006). Social Integration and Suicide in South Korea. \textit{Crisis}, 27(1), 48–50. \url{https://doi.org/10.1027/0227-5910.27.1.48}
 			
 			\bibitem{WHO2023}
 			World Health Organization. (2023). \textit{Suicide Worldwide in 2022: Global Health Estimates}. Geneva: WHO.
 			
-			\bibitem{Zhu2006}
-			Zhu, L., Gorman, D. M., \& Horel, S. (2006). \textit{Hierarchical Bayesian spatial models for alcohol availability, drug "hot spots," and violent crime}. International Journal of Health Geographics, 5(1), 54.
 		\end{thebibliography}
 	\end{flushleft}
 	
