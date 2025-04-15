@@ -1,7 +1,0 @@
-[1] Relative Risk Ratios
-[2] Statistical Significance
-[3] Exceedance Probabilities
-[4] Table Results
-
-at least two independent variables
-- i might use four
